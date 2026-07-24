@@ -41,9 +41,10 @@ compact PDFs at scan time.
   PDFs that rasterising would only ruin), *Already 1-bit*, or *Already
   small*. Nothing is written until you confirm.
 - **Tiny archival pages** — scan pages are re-rendered at their native
-  resolution (capped at 300 dpi, never upsampled), thresholded to pure
-  black & white (Otsu), despeckled, and stored with CCITT G4 fax
-  compression: **~20 KB per A4 page**.
+  resolution (capped at 300 dpi, never upsampled), binarised with a
+  locally adaptive threshold (Sauvola — faded print survives alongside
+  bold print), despeckled, and stored with CCITT G4 fax compression:
+  **~20 KB per A4 page**.
 - **Photos survive** — pages that are actually photographic (histogram
   and local-contrast analysis, not guesswork) are kept as grayscale
   JPEG instead of being dithered to mush. One document can mix both.
@@ -93,6 +94,7 @@ Sources/PressKit/      # engine: inspection, classification, compression
   PDFInspector.swift   #   verdicts: scan / born-digital / already-1-bit
   PDFRender.swift      #   page rasteriser (native-dpi, rotation-aware)
   PageClassifier.swift #   text vs photo (paper-peak + smooth-midtone)
+  Binarize.swift       #   Sauvola adaptive threshold (faded-print safe)
   Converter.swift      #   per-page G4/JPEG rebuild, min-saving guard
   Pipeline.swift       #   Otsu, cleanup, 1-bit packing (from PaperDrop)
   PDFWriter.swift      #   hand-rolled PDF: CCITT G4 + DCT + OCR layer
@@ -108,9 +110,11 @@ scripts/               # DMG packaging
 1. The page's embedded scan image is found and its true resolution
    measured; the page is re-rendered at that dpi (max 300).
 2. A histogram + spatial pass decides: document or photo?
-3. Documents: Otsu threshold → 1-bit, speckles removed, packed and
-   G4-compressed — the same encoding fax machines used, unbeatable for
-   black-and-white text.
+3. Documents: locally adaptive threshold (Sauvola) → 1-bit, speckles
+   removed, packed and G4-compressed — the same encoding fax machines
+   used, unbeatable for black-and-white text, and faint print survives
+   because each pixel is judged against its neighbourhood, not one
+   global cut.
 4. Photos: grayscale JPEG at 150 dpi — continuous tone carries no
    useful detail beyond that.
 5. Vision OCR runs on the cleaned page and an invisible text layer is

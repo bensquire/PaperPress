@@ -116,10 +116,13 @@ public enum Converter {
     /// Threshold + despeckle + pack a grayscale page and extract its CCITT
     /// G4 stream — the exact encoding a converted text page gets (also used
     /// by test fixtures so "already 1-bit" inputs match real output).
+    /// Sauvola (local adaptive) rather than global Otsu: existing scans mix
+    /// bold print with faded print on one page, and a global split loses
+    /// whichever shade lands above it.
     public static func encodeG4(_ gray: Pipeline.GrayImage, dpi: Int) throws
         -> (stream: G4.Stream, page: Pipeline.ProcessedPage)
     {
-        var bw = Pipeline.threshold(gray, at: Pipeline.otsuThreshold(gray))
+        var bw = Binarize.sauvola(gray, dpi: dpi)
         // The page is already cropped to the paper — despeckle only;
         // removing border-touching components could eat real content.
         Pipeline.cleanComponents(&bw, removeBorder: false)
