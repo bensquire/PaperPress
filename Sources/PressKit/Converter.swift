@@ -23,9 +23,10 @@ public enum Converter {
         /// print too small for the source resolution cannot survive any
         /// threshold, and legibility beats compression. Calibrated by
         /// magnified inspection of real receipts and certificates:
-        /// visually clean pages score <= 0.177, visibly degraded ones
-        /// (clogged counters, merged strokes) >= 0.191.
-        public var maxG4Damage = 0.18
+        /// visually crisp pages score <= 0.153, pages with any visible
+        /// thickening/clogging >= 0.173. (Each earlier, laxer value was
+        /// falsified by side-by-side crops of a real document.)
+        public var maxG4Damage = 0.16
         /// Format for those demoted text pages. 4-bit grayscale is both
         /// smaller than JPEG q0.6 on document content and crisper (no DCT
         /// ringing); JPEG remains for anyone preferring smooth tones.

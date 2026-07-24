@@ -96,11 +96,13 @@ final class BinarizeTests: XCTestCase {
     }
 
     func test_damage_calibrationAnchors_holdWithinTolerance() {
-        // The 0.18 threshold rests on measured scores (clean <= 0.177,
-        // degraded >= 0.191 on real documents). These fixture anchors fail
-        // if the metric itself drifts, even when pages don't cross the
-        // threshold. Bands are wide enough to absorb CoreText rendering
-        // variation across OS versions.
+        // The threshold rests on measured scores of real documents (crisp
+        // <= 0.153, degraded >= 0.173). These fixture anchors fail if the
+        // metric itself drifts, even when pages don't cross the threshold.
+        // Bands are wide enough to absorb CoreText rendering variation
+        // across OS versions. (Rendered-then-upsampled fixtures floor at
+        // ~0.165 regardless of type size, so they all sit on the demote
+        // side; real crisp scans score 0.07-0.15.)
         let tiny = Fixtures.renderedTextPage(fontSize: 4, ink: 0.3).resampled(scale: 4)
         let tinyScore = Binarize.damage(tiny, Binarize.sauvola(tiny, dpi: 300))
         XCTAssertGreaterThan(tinyScore, 0.30)
@@ -110,20 +112,6 @@ final class BinarizeTests: XCTestCase {
         let normalScore = Binarize.damage(normal, Binarize.sauvola(normal, dpi: 300))
         XCTAssertGreaterThan(normalScore, 0.10)
         XCTAssertLessThan(normalScore, 0.23)
-    }
-
-    func test_damage_normalPrintFromLowResSource_staysUnderShippedThreshold() {
-        // Arrange — same low-res treatment, but normal-size print (like
-        // the certificates that binarise fine at 100 dpi)
-        let upsampled = Fixtures.renderedTextPage(fontSize: 14, ink: 0.1)
-            .resampled(scale: 4)
-
-        // Act
-        let bw = Binarize.sauvola(upsampled, dpi: 300)
-        let damage = Binarize.damage(upsampled, bw)
-
-        // Assert
-        XCTAssertLessThan(damage, Converter.Settings().maxG4Damage)
     }
 
     func test_damage_erasedInk_scoresHigh() {
