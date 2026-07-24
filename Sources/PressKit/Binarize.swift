@@ -11,6 +11,41 @@ import Foundation
 public enum Binarize {
     /// Sauvola dynamic-range constant (half the gray range).
     static let dynamicRange = 128.0
+    /// damage(): a block counts as content when its mean is at least this
+    /// far (× contrast) below paper…
+    static let contentDarknessGate = 0.15
+    /// …AND its local range exceeds this (× contrast) — text strokes, not
+    /// flat decorative gray, which 1-bit legitimately drops.
+    static let contentContrastGate = 0.3
+
+    /// Ink and paper class means at the Otsu split, derived from the
+    /// histogram in O(256) — the same quantities Otsu's search computes
+    /// internally, without another full-image pass.
+    static func classMeans(_ g: Pipeline.GrayImage)
+        -> (ink: Double, paper: Double)?
+    {
+        let hist = Pipeline.histogram(g)
+        let total = hist.reduce(0, +)
+        guard total > 0 else { return nil }
+        let sumAll = (0..<256).reduce(0.0) { $0 + Double($1) * hist[$1] }
+        var bestVar = -1.0
+        var best: (ink: Double, paper: Double)?
+        var cum = 0.0
+        var cumSum = 0.0
+        for t in 1..<256 {
+            cum += hist[t - 1]
+            cumSum += Double(t - 1) * hist[t - 1]
+            if cum == 0 || cum == total { continue }
+            let m0 = cumSum / cum
+            let m1 = (sumAll - cumSum) / (total - cum)
+            let v = cum * (total - cum) * (m0 - m1) * (m0 - m1)
+            if v > bestVar {
+                bestVar = v
+                best = (m0, m1)
+            }
+        }
+        return best
+    }
 
     /// How much a binarisation damaged a page, 0…1-ish. Both images are
     /// box-downsampled and the binary one is mapped back onto the gray
@@ -26,20 +61,7 @@ public enum Binarize {
         let sw = w / block, sh = h / block
         guard sw > 0, sh > 0 else { return 0 }
 
-        let t = Int(Pipeline.otsuThreshold(g))
-        var inkSum = 0.0, inkN = 0.0, paperSum = 0.0, paperN = 0.0
-        for p in g.pixels {
-            if Int(p) < t {
-                inkSum += Double(p)
-                inkN += 1
-            } else {
-                paperSum += Double(p)
-                paperN += 1
-            }
-        }
-        guard inkN > 0, paperN > 0 else { return 0 }
-        let inkLevel = inkSum / inkN
-        let paperLevel = paperSum / paperN
+        guard let (inkLevel, paperLevel) = classMeans(g) else { return 0 }
         let contrast = paperLevel - inkLevel
         guard contrast > 20 else { return 0 }
 
@@ -63,12 +85,9 @@ public enum Binarize {
                 }
                 let n = Double(block * block)
                 let gMean = gSum / n
-                // Only structured content blocks: dark enough to hold ink
-                // AND locally contrasty (text strokes/edges). Flat gray —
-                // decorative banners, tints — is continuous-tone that 1-bit
-                // legitimately drops; it must not dominate the score.
-                guard gMean < paperLevel - 0.15 * contrast,
-                    gMax - gMin > 0.3 * contrast
+                // Only structured content blocks — see the gate constants.
+                guard gMean < paperLevel - contentDarknessGate * contrast,
+                    gMax - gMin > contentContrastGate * contrast
                 else { continue }
                 let bMean = (inkFrac / n) * inkLevel + (1 - inkFrac / n) * paperLevel
                 diffSum += abs(bMean - gMean) / contrast
@@ -109,20 +128,35 @@ public enum Binarize {
         }
 
         var ink = [Bool](repeating: false, count: w * h)
-        for y in 0..<h {
-            let y0 = max(0, y - r), y1 = min(h, y + r + 1)
-            for x in 0..<w {
-                let x0 = max(0, x - r), x1 = min(w, x + r + 1)
-                let n = Double((y1 - y0) * (x1 - x0))
-                let a = y0 * (w + 1), b = y1 * (w + 1)
-                let s1 = Double(
-                    sum[b + x1] &+ sum[a + x0] &- sum[a + x1] &- sum[b + x0])
-                let s2 = Double(
-                    sumSq[b + x1] &+ sumSq[a + x0] &- sumSq[a + x1] &- sumSq[b + x0])
-                let mean = s1 / n
-                let variance = max(0, s2 / n - mean * mean)
-                let t = mean * (1 + k * (variance.squareRoot() / dynamicRange - 1))
-                ink[y * w + x] = Double(g.pixels[y * w + x]) < t
+        // Unsafe buffers: this loop touches ~10 subscripts per pixel and
+        // bounds checks measurably dominate it on 8+ Mpx pages.
+        sum.withUnsafeBufferPointer { sumBuf in
+            sumSq.withUnsafeBufferPointer { sqBuf in
+                g.pixels.withUnsafeBufferPointer { pix in
+                    ink.withUnsafeMutableBufferPointer { out in
+                        for y in 0..<h {
+                            let y0 = max(0, y - r), y1 = min(h, y + r + 1)
+                            let a = y0 * (w + 1), b = y1 * (w + 1)
+                            let rowBase = y * w
+                            for x in 0..<w {
+                                let x0 = max(0, x - r), x1 = min(w, x + r + 1)
+                                let n = Double((y1 - y0) * (x1 - x0))
+                                let s1 = Double(
+                                    sumBuf[b + x1] &+ sumBuf[a + x0]
+                                        &- sumBuf[a + x1] &- sumBuf[b + x0])
+                                let s2 = Double(
+                                    sqBuf[b + x1] &+ sqBuf[a + x0]
+                                        &- sqBuf[a + x1] &- sqBuf[b + x0])
+                                let mean = s1 / n
+                                let variance = max(0, s2 / n - mean * mean)
+                                let t =
+                                    mean
+                                    * (1 + k * (variance.squareRoot() / dynamicRange - 1))
+                                out[rowBase + x] = Double(pix[rowBase + x]) < t
+                            }
+                        }
+                    }
+                }
             }
         }
         return Pipeline.BinaryImage(width: w, height: h, ink: ink)

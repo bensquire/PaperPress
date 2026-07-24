@@ -66,7 +66,7 @@ final class BinarizeTests: XCTestCase {
         XCTAssertLessThan(Double(disagree) / Double(adaptive.ink.count), 0.01)
     }
 
-    func test_damage_cleanBinarisation_scoresLow() {
+    func test_damage_cleanBinarisation_staysUnderShippedThreshold() {
         // Arrange
         let page = Fixtures.textPage(noise: true)
 
@@ -74,8 +74,39 @@ final class BinarizeTests: XCTestCase {
         let bw = Binarize.sauvola(page, dpi: 300)
         let damage = Binarize.damage(page, bw)
 
-        // Assert — well under the G4 fallback threshold
-        XCTAssertLessThan(damage, 0.15)
+        // Assert — clearly under the shipped G4 fallback threshold
+        XCTAssertLessThan(damage, Converter.Settings().maxG4Damage - 0.05)
+    }
+
+    func test_damage_tinyPrintFromLowResSource_exceedsShippedThreshold() {
+        // Arrange — real letterforms at ~4px, upsampled 4× exactly as the
+        // converter treats a 75 dpi source. At this size the antialiasing
+        // IS the glyph; binarisation must be measurably destructive so the
+        // converter demotes the page. (Regular synthetic patterns don't
+        // trigger this — only irregular glyph shapes do.)
+        let upsampled = Fixtures.renderedTextPage(fontSize: 4, ink: 0.3)
+            .resampled(scale: 4)
+
+        // Act
+        let bw = Binarize.sauvola(upsampled, dpi: 300)
+        let damage = Binarize.damage(upsampled, bw)
+
+        // Assert
+        XCTAssertGreaterThan(damage, Converter.Settings().maxG4Damage)
+    }
+
+    func test_damage_normalPrintFromLowResSource_staysUnderShippedThreshold() {
+        // Arrange — same low-res treatment, but normal-size print (like
+        // the certificates that binarise fine at 100 dpi)
+        let upsampled = Fixtures.renderedTextPage(fontSize: 14, ink: 0.1)
+            .resampled(scale: 4)
+
+        // Act
+        let bw = Binarize.sauvola(upsampled, dpi: 300)
+        let damage = Binarize.damage(upsampled, bw)
+
+        // Assert
+        XCTAssertLessThan(damage, Converter.Settings().maxG4Damage)
     }
 
     func test_damage_erasedInk_scoresHigh() {

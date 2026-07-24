@@ -13,6 +13,30 @@ extension CGPDFPage {
     }
 }
 
+extension Pipeline.GrayImage {
+    /// Area-averaged rescale — used to derive a lower-resolution page from
+    /// a render already in hand instead of rasterising the PDF again.
+    public func resampled(scale: Double) -> Pipeline.GrayImage {
+        let nw = max(1, Int((Double(width) * scale).rounded()))
+        let nh = max(1, Int((Double(height) * scale).rounded()))
+        guard let img = cgImage else { return self }
+        var out = [UInt8](repeating: 255, count: nw * nh)
+        out.withUnsafeMutableBytes { buf in
+            guard
+                let ctx = CGContext(
+                    data: buf.baseAddress, width: nw, height: nh,
+                    bitsPerComponent: 8, bytesPerRow: nw,
+                    space: CGColorSpaceCreateDeviceGray(),
+                    bitmapInfo: CGImageAlphaInfo.none.rawValue
+                )
+            else { return }
+            ctx.interpolationQuality = .high
+            ctx.draw(img, in: CGRect(x: 0, y: 0, width: nw, height: nh))
+        }
+        return Pipeline.GrayImage(width: nw, height: nh, pixels: out)
+    }
+}
+
 /// Rasterises a PDF page to 8-bit grayscale for the compression pipeline.
 public enum PDFRender {
     public static func gray(page: CGPDFPage, dpi: Int) throws -> Pipeline.GrayImage {

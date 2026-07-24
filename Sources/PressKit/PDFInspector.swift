@@ -99,19 +99,18 @@ public enum PDFInspector {
         )
     }
 
-    /// Grayscale-JPEG output density (bytes/pixel at q0.6, measured).
-    static let estimatedJPEGBytesPerPixel = 0.15
+    /// The processing resolution Converter uses for text pages (mirrors
+    /// Converter.Settings.dpiCap's default — the inspector has no Settings).
+    static let assumedTextDpi = 300.0
 
-    /// Expected output size of one converted page. Text pages render at
-    /// ~300 dpi and G4-compress; pages scanned below the G4 legibility
-    /// floor stay grayscale JPEG at native resolution.
+    /// Expected output size of one converted page, assuming G4 text at
+    /// the standard processing resolution. The converter may demote a
+    /// page to grayscale JPEG based on *measured* binarisation damage,
+    /// which inspection can't predict — such pages come out larger than
+    /// estimated.
     static func estimatedPageBytes(_ page: PageInfo) -> Int {
-        if case let .scan(native, _) = page.kind, native < 150 {
-            let px = page.widthPt / 72 * Double(native) * (page.heightPt / 72 * Double(native))
-            return max(8_000, Int(px * estimatedJPEGBytesPerPixel))
-        }
-        let dpi = 300.0
-        let px = page.widthPt / 72 * dpi * (page.heightPt / 72 * dpi)
+        let px =
+            page.widthPt / 72 * assumedTextDpi * (page.heightPt / 72 * assumedTextDpi)
         return max(8_000, Int(px * estimatedBytesPerPixel))
     }
 

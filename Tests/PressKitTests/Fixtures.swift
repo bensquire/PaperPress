@@ -1,4 +1,5 @@
 import CoreGraphics
+import CoreText
 import Foundation
 import XCTest
 
@@ -133,6 +134,38 @@ enum Fixtures {
         let url = dir.appendingPathComponent(name)
         try! data.write(to: url)
         return url
+    }
+
+    /// Real rendered type on paper — glyph shapes matter for the damage
+    /// metric in ways regular synthetic patterns can't reproduce.
+    /// `ink` is the text gray (0 = black); page is 620×800 at "native" scale.
+    static func renderedTextPage(fontSize: CGFloat, ink: CGFloat) -> Pipeline.GrayImage {
+        let w = 620, h = 800
+        var px = [UInt8](repeating: 250, count: w * h)
+        px.withUnsafeMutableBytes { buf in
+            let ctx = CGContext(
+                data: buf.baseAddress, width: w, height: h, bitsPerComponent: 8,
+                bytesPerRow: w, space: CGColorSpaceCreateDeviceGray(),
+                bitmapInfo: CGImageAlphaInfo.none.rawValue)!
+            ctx.setFillColor(gray: 250 / 255.0, alpha: 1)
+            ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+            let font = CTFontCreateWithName("Helvetica" as CFString, fontSize, nil)
+            let attrs: [CFString: Any] = [
+                kCTFontAttributeName: font,
+                kCTForegroundColorAttributeName: CGColor(gray: ink, alpha: 1),
+            ]
+            let sample = "DOMESTIC APPLIANCE REPAIRS TEL: 0115 2896529 MOB: 07711 265414 "
+            var y = CGFloat(20)
+            while y < CGFloat(h) - 20 {
+                let line = CTLineCreateWithAttributedString(
+                    CFAttributedStringCreate(
+                        nil, (sample + sample) as CFString, attrs as CFDictionary)!)
+                ctx.textPosition = CGPoint(x: 15, y: y)
+                CTLineDraw(line, ctx)
+                y += fontSize * 1.6
+            }
+        }
+        return Pipeline.GrayImage(width: w, height: h, pixels: px)
     }
 
     /// Create an empty placeholder file (with intermediate directories) —

@@ -59,50 +59,62 @@ public enum Converter {
         }
         var pages: [PDFWriter.Page] = []
         var kinds: [PageClassifier.Kind] = []
+        // Text pages render at the cap even when the source is lower-res:
+        // a low-dpi grayscale scan carries sub-pixel detail in its
+        // antialiasing, and thresholding at native resolution destroys it
+        // (jagged text). Upsampling first turns that antialiasing back
+        // into smooth 1-bit edges — at the price of processing every
+        // low-res page at cap resolution. Photo pages keep native.
+        let textDpi = max(72, settings.dpiCap)
+        let probeRenderDpi = min(probeDpi, textDpi)
         for i in 1...doc.numberOfPages {
             guard let page = doc.page(at: i) else { continue }
-            let nativeDpi: Int
-            if case let .scan(dpi, _) = report.pages[i - 1].kind {
-                nativeDpi = dpi
-            } else {
-                nativeDpi = settings.dpiCap  // born-digital page in a mixed file
-            }
-            // Text pages render at the cap even when the source is
-            // lower-res: a low-dpi grayscale scan carries sub-pixel detail
-            // in its antialiasing, and thresholding at native resolution
-            // destroys it (jagged text). Upsampling first turns that
-            // antialiasing back into smooth 1-bit edges. Photo pages keep
-            // native — JPEG preserves the grayscale as-is.
-            let textDpi = max(72, settings.dpiCap)
+            let probe = try PDFRender.gray(page: page, dpi: probeRenderDpi)
 
-            let probe = try PDFRender.gray(page: page, dpi: min(probeDpi, textDpi))
-            var kind = PageClassifier.classify(probe)
-
-            var content: PDFWriter.Content?
-            var ocrImage: CGImage?
-            var dpi = textDpi
-            if kind == .text {
+            // The encoding ladder: classified text → G4, unless
+            // binarisation measurably destroys legibility → grayscale JPEG.
+            var g4: (stream: G4.Stream, page: Pipeline.ProcessedPage)?
+            var demotedGray: Pipeline.GrayImage?
+            if PageClassifier.classify(probe) == .text {
                 let gray =
-                    textDpi == min(probeDpi, textDpi)
+                    textDpi == probeRenderDpi
                     ? probe
                     : try PDFRender.gray(page: page, dpi: textDpi)
                 let bw = Binarize.sauvola(gray, dpi: textDpi)
-                if Binarize.damage(gray, bw) > settings.maxG4Damage {
-                    // Print too small for the source resolution — no
-                    // threshold keeps it legible. Stay grayscale.
-                    kind = .photo
+                if Binarize.damage(gray, bw) <= settings.maxG4Damage {
+                    g4 = try encodeG4(binarized: bw, dpi: textDpi)
                 } else {
-                    let (stream, packed) = try encodeG4(binarized: bw, dpi: textDpi)
-                    content = .g4(stream)
-                    ocrImage = packed.cgImage
+                    // Print too small for the source resolution — no
+                    // threshold keeps it legible. Stay grayscale, reusing
+                    // this render instead of rasterising a third time.
+                    demotedGray = gray
                 }
             }
-            if kind == .photo {
+
+            let content: PDFWriter.Content
+            let ocrImage: CGImage?
+            let dpi: Int
+            if let (stream, packed) = g4 {
+                content = .g4(stream)
+                ocrImage = packed.cgImage
+                dpi = textDpi
+                kinds.append(.text)
+            } else {
+                let nativeDpi: Int =
+                    if case let .scan(d, _) = report.pages[i - 1].kind {
+                        d
+                    } else {
+                        settings.photoDpiCap
+                    }
                 dpi = max(72, min(nativeDpi, settings.photoDpiCap))
-                let gray =
-                    dpi == min(probeDpi, textDpi)
-                    ? probe
-                    : try PDFRender.gray(page: page, dpi: dpi)
+                let gray: Pipeline.GrayImage =
+                    if let demotedGray {
+                        demotedGray.resampled(scale: Double(dpi) / Double(textDpi))
+                    } else if dpi == probeRenderDpi {
+                        probe
+                    } else {
+                        try PDFRender.gray(page: page, dpi: dpi)
+                    }
                 guard
                     let jpeg = gray.jpegData(quality: settings.jpegQuality, dpi: dpi)
                 else {
@@ -110,13 +122,13 @@ public enum Converter {
                 }
                 content = .jpegGray(jpeg, width: gray.width, height: gray.height)
                 ocrImage = gray.cgImage
+                kinds.append(.photo)
             }
-            kinds.append(kind)
             var words: [OCR.Word] = []
             if settings.ocr, let img = ocrImage {
                 words = try OCR.recognize(cgImage: img)
             }
-            pages.append(PDFWriter.Page(content: content!, dpi: dpi, ocrWords: words))
+            pages.append(PDFWriter.Page(content: content, dpi: dpi, ocrWords: words))
         }
 
         let data = PDFWriter.build(pages: pages)
