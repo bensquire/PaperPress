@@ -130,9 +130,10 @@ final class BinarizeTests: XCTestCase {
         let dpi = 300
         let window = max(25, dpi / 6) | 1
         let r = window / 2
+        let k = 0.15
 
         // Act
-        let banded = Binarize.sauvola(g, dpi: dpi)
+        let banded = Binarize.sauvola(g, dpi: dpi, k: k)
 
         // Assert — every pixel matches a brute-force local mean/std Sauvola
         for y in stride(from: 0, to: h, by: 7) {
@@ -150,7 +151,7 @@ final class BinarizeTests: XCTestCase {
                 }
                 let mean = sum / n
                 let sd = max(0, sq / n - mean * mean).squareRoot()
-                let t = mean * (1 + 0.15 * (sd / 128.0 - 1))
+                let t = mean * (1 + k * (sd / Binarize.dynamicRange - 1))
                 XCTAssertEqual(
                     banded[x, y], Double(g.pixels[y * w + x]) < t,
                     "mismatch at (\(x),\(y))"

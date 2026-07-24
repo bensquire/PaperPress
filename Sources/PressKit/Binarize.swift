@@ -168,20 +168,20 @@ public enum Binarize {
         return worst
     }
 
-    /// Adaptive threshold. `k` controls strictness (higher = less ink);
-    /// the literature uses 0.2–0.5, but faded print sits barely below its
-    /// local mean, so PaperPress runs gentler (0.15) — measured on real
-    /// faded certificates, and still white on paper grain and typical
-    /// bleed-through. The window scales with dpi (~1/6 inch) so behaviour
-    /// is resolution-stable.
-    /// Rows thresholded per band. Integral tables are built per band over
-    /// just the rows the band's windows can reach, so transient memory is
+    /// Rows thresholded per band: integral tables are built per band over
+    /// just the rows the band's windows reach, so transient memory is
     /// O(width × band) — ~7 MB — instead of two full-page UInt64 tables
     /// (~140 MB for an A4 at 300 dpi). The overlapping ±r rows are
     /// recomputed per band; the integral build is a small fraction of the
     /// pass, so the recompute is cheap.
     static let sauvolaBandRows = 128
 
+    /// Adaptive threshold. `k` controls strictness (higher = less ink);
+    /// the literature uses 0.2–0.5, but faded print sits barely below its
+    /// local mean, so PaperPress runs gentler (0.15) — measured on real
+    /// faded certificates, and still white on paper grain and typical
+    /// bleed-through. The window scales with dpi (~1/6 inch) so behaviour
+    /// is resolution-stable.
     public static func sauvola(
         _ g: Pipeline.GrayImage, dpi: Int, k: Double = 0.15
     ) -> Pipeline.BinaryImage {
@@ -192,35 +192,32 @@ public enum Binarize {
         var ink = [Bool](repeating: false, count: w * h)
         let stride = w + 1
         let maxStripRows = sauvolaBandRows + 2 * r + 1
-        // Integral strips of value and value², reused across bands.
+        // Integral strips of value and value², reused across bands. Row 0
+        // and column 0 of each strip are the integral's zero border: never
+        // written after the zero-filled allocation, so no per-band reset
+        // is needed.
         var sum = [UInt64](repeating: 0, count: stride * (maxStripRows + 1))
         var sumSq = [UInt64](repeating: 0, count: stride * (maxStripRows + 1))
 
-        var bandStart = 0
-        while bandStart < h {
-            let bandEnd = min(h, bandStart + sauvolaBandRows)
-            // Strip covers every row the band's windows can touch.
-            let stripStart = max(0, bandStart - r)
-            let stripEnd = min(h, bandEnd + r)
-
-            // Unsafe buffers: these loops touch ~10 subscripts per pixel
-            // and bounds checks measurably dominate at 8+ Mpx.
-            sum.withUnsafeMutableBufferPointer { sumBuf in
-                sumSq.withUnsafeMutableBufferPointer { sqBuf in
-                    g.pixels.withUnsafeBufferPointer { pix in
-                        ink.withUnsafeMutableBufferPointer { out in
-                            for i in 0..<stride {
-                                sumBuf[i] = 0
-                                sqBuf[i] = 0
-                            }
+        // Unsafe buffers: these loops touch ~10 subscripts per pixel and
+        // bounds checks measurably dominate at 8+ Mpx.
+        sum.withUnsafeMutableBufferPointer { sumBuf in
+            sumSq.withUnsafeMutableBufferPointer { sqBuf in
+                g.pixels.withUnsafeBufferPointer { pix in
+                    ink.withUnsafeMutableBufferPointer { out in
+                        var bandStart = 0
+                        while bandStart < h {
+                            let bandEnd = min(h, bandStart + sauvolaBandRows)
+                            // Strip covers every row the band's windows
+                            // can touch.
+                            let stripStart = max(0, bandStart - r)
+                            let stripEnd = min(h, bandEnd + r)
                             for sy in 0..<(stripEnd - stripStart) {
                                 var rowSum: UInt64 = 0
                                 var rowSq: UInt64 = 0
                                 let src = (stripStart + sy) * w
                                 let above = sy * stride
                                 let here = (sy + 1) * stride
-                                sumBuf[here] = 0
-                                sqBuf[here] = 0
                                 for x in 0..<w {
                                     let v = UInt64(pix[src + x])
                                     rowSum += v
@@ -252,11 +249,11 @@ public enum Binarize {
                                     out[rowBase + x] = Double(pix[rowBase + x]) < t
                                 }
                             }
+                            bandStart = bandEnd
                         }
                     }
                 }
             }
-            bandStart = bandEnd
         }
         return Pipeline.BinaryImage(width: w, height: h, ink: ink)
     }

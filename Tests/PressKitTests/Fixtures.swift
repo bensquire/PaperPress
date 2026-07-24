@@ -128,7 +128,7 @@ enum Fixtures {
         PDFWriter.build(
             pages: try pages.map { g in
                 PDFWriter.Page(
-                    content: .g4(try Converter.encodeG4(g, dpi: dpi).stream),
+                    content: .g4(try Converter.encodeG4(g, dpi: dpi)),
                     dpi: dpi
                 )
             }
@@ -159,6 +159,10 @@ enum Fixtures {
         return url
     }
 
+    /// The line renderedTextPage repeats — tests asserting on OCR output
+    /// derive their expected words from here.
+    static let sampleText = "DOMESTIC APPLIANCE REPAIRS TEL: 0115 2896529 MOB: 07711 265414 "
+
     /// Real rendered type on paper — glyph shapes matter for the damage
     /// metric in ways regular synthetic patterns can't reproduce.
     /// `ink` is the text gray (0 = black); page is 620×800 at "native" scale.
@@ -177,7 +181,7 @@ enum Fixtures {
                 kCTFontAttributeName: font,
                 kCTForegroundColorAttributeName: CGColor(gray: ink, alpha: 1),
             ]
-            let sample = "DOMESTIC APPLIANCE REPAIRS TEL: 0115 2896529 MOB: 07711 265414 "
+            let sample = Fixtures.sampleText
             var y = CGFloat(20)
             while y < CGFloat(h) - 20 {
                 let line = CTLineCreateWithAttributedString(

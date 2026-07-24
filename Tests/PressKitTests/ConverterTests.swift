@@ -212,6 +212,7 @@ final class ConverterTests: FixtureTestCase {
         var settings = noOCR
         settings.minSavingFraction = -1
         settings.maxG4Damage = 0.01
+        settings.dpiCap = 150  // skip the 2x upsample; the arm under test is unaffected
 
         // Act
         let result = try Converter.convert(report: report, to: out, settings: settings)
@@ -224,9 +225,10 @@ final class ConverterTests: FixtureTestCase {
     }
 
     func test_convert_mixedDocument_encodesEachPageByKind() throws {
-        // Arrange — a text page and a photo page in one file
-        let text = Fixtures.textPage(width: 1240, height: 1754, noise: true)
-        let photo = Fixtures.photoPage(width: 1240, height: 1754)
+        // Arrange — a text page and a photo page in one file (small pages:
+        // the assertions are about per-page encoding, not size)
+        let text = Fixtures.textPage(width: 620, height: 800, noise: true)
+        let photo = Fixtures.photoPage(width: 620, height: 800)
         let src = Fixtures.write(
             Fixtures.scannedPDF(pages: [text, photo], dpi: 150), to: dir, name: "mixed.pdf"
         )

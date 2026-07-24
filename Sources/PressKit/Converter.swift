@@ -128,19 +128,15 @@ public enum Converter {
             // is too low-res to binarise or binarisation measurably
             // destroys legibility → grayscale.
             let isText = PageClassifier.classify(probe) == .text
-            var g4: (stream: G4.Stream, page: Pipeline.ProcessedPage)?
-            var g4OCRImage: CGImage?
+            var g4Stream: G4.Stream?
+            var g4Gray: Pipeline.GrayImage?
             var demotedGray: Pipeline.GrayImage?
             if isText, nativeDpi >= settings.minG4Dpi {
                 let gray = try preparedGray(dpi: textDpi, clean: cleanText)
                 let bw = Binarize.sauvola(gray, dpi: textDpi)
                 if Binarize.damage(gray, bw) <= settings.maxG4Damage {
-                    g4 = try encodeG4(binarized: bw, dpi: textDpi)
-                    // OCR reads the grayscale, downsampled to ocrDpi —
-                    // better for Vision than the 1-bit page, and much
-                    // faster. Word boxes are normalised, so the text
-                    // layer is unaffected.
-                    g4OCRImage = ocrInput(gray, at: textDpi).cgImage
+                    g4Stream = try encodeG4(binarized: bw, dpi: textDpi)
+                    g4Gray = gray
                 } else {
                     // Binarisation measurably destroys a region — stay
                     // grayscale, reusing this render instead of
@@ -150,11 +146,11 @@ public enum Converter {
             }
 
             let content: PDFWriter.Content
-            let ocrImage: CGImage?
+            let ocrSource: Pipeline.GrayImage
             let dpi: Int
-            if let (stream, _) = g4 {
-                content = .g4(stream)
-                ocrImage = g4OCRImage
+            if let g4Stream, let gray = g4Gray {
+                content = .g4(g4Stream)
+                ocrSource = gray
                 dpi = textDpi
                 kinds.append(.text)
             } else {
@@ -173,11 +169,15 @@ public enum Converter {
                     try isText && settings.demotedTextFormat == .gray4
                     ? .gray4Flate(Gray4.encode(gray))
                     : jpegContent(gray, quality: settings.jpegQuality, dpi: dpi)
-                ocrImage = ocrInput(gray, at: dpi).cgImage
+                ocrSource = gray
                 kinds.append(.photo)
             }
+            // OCR reads the grayscale, downsampled to ocrDpi — better for
+            // Vision than 1-bit input, and much faster. Word boxes are
+            // normalised, so the text layer is unaffected. Prepared only
+            // when OCR is on.
             var words: [OCR.Word] = []
-            if settings.ocr, let img = ocrImage {
+            if settings.ocr, let img = ocrInput(ocrSource, at: dpi).cgImage {
                 words = try OCR.recognize(cgImage: img)
             }
             pages.append(PDFWriter.Page(content: content, dpi: dpi, ocrWords: words))
@@ -221,13 +221,13 @@ public enum Converter {
     /// bold print with faded print on one page, and a global split loses
     /// whichever shade lands above it.
     public static func encodeG4(_ gray: Pipeline.GrayImage, dpi: Int) throws
-        -> (stream: G4.Stream, page: Pipeline.ProcessedPage)
+        -> G4.Stream
     {
         try encodeG4(binarized: Binarize.sauvola(gray, dpi: dpi), dpi: dpi)
     }
 
     static func encodeG4(binarized: Pipeline.BinaryImage, dpi: Int) throws
-        -> (stream: G4.Stream, page: Pipeline.ProcessedPage)
+        -> G4.Stream
     {
         var bw = binarized
         // The page is already cropped to the paper — despeckle only;
@@ -237,7 +237,7 @@ public enum Converter {
             bw, crop: Pipeline.Crop(x0: 0, y0: 0, x1: bw.width, y1: bw.height),
             dpi: dpi
         )
-        return (try G4.extractStream(fromTIFF: G4.tiff(from: packed)), packed)
+        return try G4.extractStream(fromTIFF: G4.tiff(from: packed))
     }
 
     private static func passThrough(

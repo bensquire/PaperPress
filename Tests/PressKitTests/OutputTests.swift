@@ -7,7 +7,7 @@ final class PDFWriterTests: XCTestCase {
     func test_build_embedsInvisibleOCRTextLayer() throws {
         // Arrange — a G4 page with one recognised word
         let page = Fixtures.textPage()
-        let stream = try Converter.encodeG4(page, dpi: 150).stream
+        let stream = try Converter.encodeG4(page, dpi: 150)
         let words = [
             OCR.Word(text: "HELLO", box: CGRect(x: 0.1, y: 0.8, width: 0.2, height: 0.05))
         ]
@@ -48,7 +48,8 @@ final class OCRTests: XCTestCase {
         // Assert — Vision finds text and normalised boxes are in range
         XCTAssertFalse(words.isEmpty)
         let joined = words.map(\.text).joined(separator: " ")
-        XCTAssertTrue(joined.contains("REPAIRS") || joined.contains("DOMESTIC"))
+        let expected = Fixtures.sampleText.split(separator: " ").map(String.init)
+        XCTAssertTrue(expected.contains { joined.contains($0) })
         for word in words {
             XCTAssertTrue(word.box.minX >= 0 && word.box.maxX <= 1)
             XCTAssertTrue(word.box.minY >= 0 && word.box.maxY <= 1)
