@@ -11,6 +11,9 @@ import Foundation
 public enum Binarize {
     /// Sauvola dynamic-range constant (half the gray range).
     static let dynamicRange = 128.0
+    /// Minimum ink-paper contrast for class statistics to mean anything
+    /// (shared by damage() and EdgeClean).
+    static let minContrast = 20.0
     /// damage(): a block counts as content when its mean is at least this
     /// far (× contrast) below paper…
     static let contentDarknessGate = 0.15
@@ -63,7 +66,7 @@ public enum Binarize {
 
         guard let (inkLevel, paperLevel) = classMeans(g) else { return 0 }
         let contrast = paperLevel - inkLevel
-        guard contrast > 20 else { return 0 }
+        guard contrast > minContrast else { return 0 }
 
         var diffSum = 0.0
         var blocks = 0.0

@@ -20,35 +20,40 @@ public enum Gray4 {
         let w = g.width, h = g.height
         let rowBytes = (w + 1) / 2
 
-        // Quantize to 16 levels and pack, filtering each row with PNG "Up".
-        var raw = Data(capacity: (rowBytes + 1) * h)
-        var prev = [UInt8](repeating: 0, count: rowBytes)
-        var row = [UInt8](repeating: 0, count: rowBytes)
+        // Pass 1: quantize to 16 levels and pack two pixels per byte.
+        let lut = (0...255).map { UInt8((Double($0) / 17.0).rounded()) }
+        var packed = [UInt8](repeating: 0, count: rowBytes * h)
         for y in 0..<h {
-            for b in 0..<rowBytes {
-                row[b] = 0
-            }
+            let src = y * w
+            let dst = y * rowBytes
             for x in 0..<w {
-                let level = UInt8((Double(g.pixels[y * w + x]) / 17.0).rounded())
+                let level = lut[Int(g.pixels[src + x])]
                 if x % 2 == 0 {
-                    row[x / 2] = level << 4
+                    packed[dst + x / 2] = level << 4
                 } else {
-                    row[x / 2] |= level
+                    packed[dst + x / 2] |= level
                 }
             }
-            raw.append(2)  // PNG "Up" filter tag
-            for b in 0..<rowBytes {
-                raw.append(row[b] &- prev[b])
-            }
-            swap(&prev, &row)
         }
 
-        return Encoded(data: zlib(raw), width: w, height: h)
+        // Pass 2: PNG "Up" filter — each row minus the row above.
+        var raw = [UInt8](repeating: 0, count: (rowBytes + 1) * h)
+        for y in 0..<h {
+            let src = y * rowBytes
+            let dst = y * (rowBytes + 1)
+            raw[dst] = 2  // PNG "Up" filter tag
+            for b in 0..<rowBytes {
+                let above = y > 0 ? packed[src - rowBytes + b] : 0
+                raw[dst + 1 + b] = packed[src + b] &- above
+            }
+        }
+
+        return Encoded(data: zlib(Data(raw)), width: w, height: h)
     }
 
     /// Apple's Compression framework emits raw deflate; PDF FlateDecode
     /// wants the RFC 1950 zlib wrapper, so add header + adler32 ourselves.
-    static func zlib(_ raw: Data) -> Data {
+    private static func zlib(_ raw: Data) -> Data {
         let cap = raw.count + raw.count / 2 + 1024
         var deflated = Data(count: cap)
         let n = deflated.withUnsafeMutableBytes { dst in
@@ -65,9 +70,18 @@ public enum Gray4 {
         var a: UInt32 = 1
         var b: UInt32 = 0
         raw.withUnsafeBytes { buf in
-            for byte in buf {
-                a = (a + UInt32(byte)) % 65521
-                b = (b + a) % 65521
+            // Modulo only every 5552 bytes (the standard adler32 chunk —
+            // the largest run that can't overflow UInt32).
+            var i = 0
+            while i < buf.count {
+                let end = min(i + 5552, buf.count)
+                while i < end {
+                    a &+= UInt32(buf[i])
+                    b &+= a
+                    i += 1
+                }
+                a %= 65521
+                b %= 65521
             }
         }
         let adler = (b << 16) | a

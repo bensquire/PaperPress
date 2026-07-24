@@ -1,7 +1,8 @@
 import Foundation
 
-/// Minimal PDF writer. Pages are either CCITT G4 streams (1-bit documents,
-/// embedded losslessly) or grayscale JPEGs (photo-ish pages, DCTDecode).
+/// Minimal PDF writer. Pages are CCITT G4 streams (1-bit documents,
+/// embedded losslessly), grayscale JPEGs (photo-ish pages, DCTDecode),
+/// or 4-bit grayscale Flate (demoted text pages).
 /// An invisible OCR text layer (render mode 3) makes pages searchable.
 public enum PDFWriter {
     public enum Content {

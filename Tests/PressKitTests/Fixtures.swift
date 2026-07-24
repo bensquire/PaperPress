@@ -70,6 +70,18 @@ enum Fixtures {
         return Pipeline.GrayImage(width: width, height: height, pixels: pixels)
     }
 
+    /// Deterministic page for pixel-exact assertions: plain paper with one
+    /// solid interior paragraph block at (150..<450, 300..<340).
+    static func blockPage(width: Int = 600, height: Int = 800) -> Pipeline.GrayImage {
+        var pixels = [UInt8](repeating: 250, count: width * height)
+        for y in 300..<340 {
+            for x in 150..<450 {
+                pixels[y * width + x] = 20
+            }
+        }
+        return Pipeline.GrayImage(width: width, height: height, pixels: pixels)
+    }
+
     /// A continuous-tone page: smooth diagonal gradient.
     static func photoPage(width: Int = 600, height: Int = 800) -> Pipeline.GrayImage {
         var pixels = [UInt8](repeating: 0, count: width * height)

@@ -128,6 +128,51 @@ final class ConverterTests: FixtureTestCase {
         XCTAssertEqual(try Data(contentsOf: src), data)
     }
 
+    /// Tiny print at low resolution — forces damage-based demotion.
+    private func demotedTinyReport() throws -> PDFInspector.Report {
+        let tiny = Fixtures.renderedTextPage(fontSize: 4, ink: 0.3)
+        let src = Fixtures.write(
+            Fixtures.scannedPDF(pages: [tiny], dpi: 75), to: dir, name: "tiny.pdf"
+        )
+        return try PDFInspector.inspect(src)
+    }
+
+    func test_convert_demotedTextPage_usesGray4ByDefault() throws {
+        // Arrange
+        let out = dir.appendingPathComponent("out/tiny.pdf")
+        var settings = noOCR
+        settings.minSavingFraction = -1
+
+        // Act
+        let result = try Converter.convert(
+            report: try demotedTinyReport(), to: out, settings: settings
+        )
+
+        // Assert — demoted, and encoded as 4-bit Flate, not JPEG
+        XCTAssertEqual(result.pageKinds, [.photo])
+        let written = try Data(contentsOf: out)
+        XCTAssertNotNil(written.range(of: Data("/BitsPerComponent 4".utf8)))
+        XCTAssertNil(written.range(of: Data("DCTDecode".utf8)))
+    }
+
+    func test_convert_demotedTextPage_respectsJPEGSetting() throws {
+        // Arrange
+        let out = dir.appendingPathComponent("out/tiny.pdf")
+        var settings = noOCR
+        settings.minSavingFraction = -1
+        settings.demotedTextFormat = .jpeg
+
+        // Act
+        _ = try Converter.convert(
+            report: try demotedTinyReport(), to: out, settings: settings
+        )
+
+        // Assert
+        let written = try Data(contentsOf: out)
+        XCTAssertNotNil(written.range(of: Data("DCTDecode".utf8)))
+        XCTAssertNil(written.range(of: Data("/BitsPerComponent 4".utf8)))
+    }
+
     func test_convert_preservesSourceModificationDate() throws {
         // Arrange
         let page = Fixtures.textPage(width: 2480, height: 3508, noise: true)

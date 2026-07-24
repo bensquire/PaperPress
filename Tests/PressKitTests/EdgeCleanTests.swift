@@ -5,14 +5,7 @@ import XCTest
 final class EdgeCleanTests: XCTestCase {
     /// 600×800 page at 300 dpi: 10mm band ≈ 118px.
     private func page() -> Pipeline.GrayImage {
-        var pixels = [UInt8](repeating: 250, count: 600 * 800)
-        // Interior paragraph block (real content)
-        for y in 300..<340 {
-            for x in 150..<450 {
-                pixels[y * 600 + x] = 20
-            }
-        }
-        return Pipeline.GrayImage(width: 600, height: 800, pixels: pixels)
+        Fixtures.blockPage()
     }
 
     func test_removeScanBorders_whitensEdgeBand() {

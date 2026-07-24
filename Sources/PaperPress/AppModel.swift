@@ -70,7 +70,7 @@ final class AppModel: ObservableObject {
     @AppStorage("minSavingPercent") var minSavingPercent =
         Int(Converter.Settings().minSavingFraction * 100)
     @AppStorage("demotedTextFormat") var demotedTextFormat =
-        Converter.Settings().demotedTextFormat.rawValue
+        Converter.Settings().demotedTextFormat
     @AppStorage("removeScanEdges") var removeScanEdges =
         Converter.Settings().removeScanEdges
 
@@ -100,8 +100,7 @@ final class AppModel: ObservableObject {
         s.ocr = ocrEnabled
         s.jpegQuality = jpegQuality
         s.minSavingFraction = Double(minSavingPercent) / 100
-        s.demotedTextFormat =
-            Converter.DemotedTextFormat(rawValue: demotedTextFormat) ?? .gray4
+        s.demotedTextFormat = demotedTextFormat
         s.removeScanEdges = removeScanEdges
         return s
     }

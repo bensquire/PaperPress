@@ -31,14 +31,16 @@ public enum Converter {
         /// ringing); JPEG remains for anyone preferring smooth tones.
         /// Photographic pages always use JPEG.
         public var demotedTextFormat = DemotedTextFormat.gray4
-        /// Whiten black scan-edge bands/shadows (see EdgeClean). Applies
-        /// to text-classified pages only — photographs may legitimately be
-        /// dark at their edges.
+        /// Whiten black scan-edge bands/shadows (see EdgeClean). Runs
+        /// before classification and the damage measurement, so a heavy
+        /// band can't flip a page to photo or count as binarisation
+        /// damage. Photographic pages are never cleaned — they may
+        /// legitimately be dark at their edges.
         public var removeScanEdges = true
         public init() {}
     }
 
-    public enum DemotedTextFormat: String, Sendable, CaseIterable {
+    public enum DemotedTextFormat: String, Sendable {
         case gray4
         case jpeg
     }
@@ -85,19 +87,27 @@ public enum Converter {
         let probeRenderDpi = min(probeDpi, textDpi)
         for i in 1...doc.numberOfPages {
             guard let page = doc.page(at: i) else { continue }
-            let probe = try PDFRender.gray(page: page, dpi: probeRenderDpi)
+            var probe = try PDFRender.gray(page: page, dpi: probeRenderDpi)
+            if settings.removeScanEdges {
+                // Clean before classifying: a heavy edge band would
+                // otherwise read as photo content — the one path where
+                // the cleanup would never run.
+                EdgeClean.removeScanBorders(&probe, dpi: probeRenderDpi)
+            }
 
             // The encoding ladder: classified text → G4, unless
-            // binarisation measurably destroys legibility → grayscale JPEG.
+            // binarisation measurably destroys legibility → grayscale.
             var g4: (stream: G4.Stream, page: Pipeline.ProcessedPage)?
             var demotedGray: Pipeline.GrayImage?
             if PageClassifier.classify(probe) == .text {
-                var gray =
-                    textDpi == probeRenderDpi
-                    ? probe
-                    : try PDFRender.gray(page: page, dpi: textDpi)
-                if settings.removeScanEdges {
-                    EdgeClean.removeScanBorders(&gray, dpi: textDpi)
+                var gray: Pipeline.GrayImage
+                if textDpi == probeRenderDpi {
+                    gray = probe  // already cleaned
+                } else {
+                    gray = try PDFRender.gray(page: page, dpi: textDpi)
+                    if settings.removeScanEdges {
+                        EdgeClean.removeScanBorders(&gray, dpi: textDpi)
+                    }
                 }
                 let bw = Binarize.sauvola(gray, dpi: textDpi)
                 if Binarize.damage(gray, bw) <= settings.maxG4Damage {
@@ -126,23 +136,19 @@ public enum Converter {
                         settings.photoDpiCap
                     }
                 dpi = max(72, min(nativeDpi, settings.photoDpiCap))
-                let gray: Pipeline.GrayImage =
-                    if let demotedGray {
-                        demotedGray.resampled(scale: Double(dpi) / Double(textDpi))
-                    } else if dpi == probeRenderDpi {
-                        probe
-                    } else {
-                        try PDFRender.gray(page: page, dpi: dpi)
-                    }
-                if demotedGray != nil, settings.demotedTextFormat == .gray4 {
-                    content = .gray4Flate(Gray4.encode(gray))
+                let gray: Pipeline.GrayImage
+                if let demotedGray {
+                    gray = demotedGray.resampled(scale: Double(dpi) / Double(textDpi))
+                    content =
+                        try settings.demotedTextFormat == .gray4
+                        ? .gray4Flate(Gray4.encode(gray))
+                        : jpegContent(gray, quality: settings.jpegQuality, dpi: dpi)
                 } else {
-                    guard
-                        let jpeg = gray.jpegData(quality: settings.jpegQuality, dpi: dpi)
-                    else {
-                        throw PressError.scanFailed("JPEG encode failed")
-                    }
-                    content = .jpegGray(jpeg, width: gray.width, height: gray.height)
+                    gray =
+                        dpi == probeRenderDpi
+                        ? probe
+                        : try PDFRender.gray(page: page, dpi: dpi)
+                    content = try jpegContent(gray, quality: settings.jpegQuality, dpi: dpi)
                 }
                 ocrImage = gray.cgImage
                 kinds.append(.photo)
@@ -167,6 +173,15 @@ public enum Converter {
             inputBytes: report.fileBytes, outputBytes: data.count,
             converted: true, pageKinds: kinds
         )
+    }
+
+    private static func jpegContent(
+        _ gray: Pipeline.GrayImage, quality: Double, dpi: Int
+    ) throws -> PDFWriter.Content {
+        guard let jpeg = gray.jpegData(quality: quality, dpi: dpi) else {
+            throw PressError.scanFailed("JPEG encode failed")
+        }
+        return .jpegGray(jpeg, width: gray.width, height: gray.height)
     }
 
     /// Threshold + despeckle + pack a grayscale page and extract its CCITT

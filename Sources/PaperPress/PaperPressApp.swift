@@ -67,9 +67,9 @@ struct SettingsView: View {
             }
             Picker("Low-res text pages", selection: $model.demotedTextFormat) {
                 Text("4-bit grayscale (crisper, smaller)")
-                    .tag(Converter.DemotedTextFormat.gray4.rawValue)
+                    .tag(Converter.DemotedTextFormat.gray4)
                 Text("Grayscale JPEG (smoother tones)")
-                    .tag(Converter.DemotedTextFormat.jpeg.rawValue)
+                    .tag(Converter.DemotedTextFormat.jpeg)
             }
             .help(
                 "Pages whose print is too small to survive black & white "
