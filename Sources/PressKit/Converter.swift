@@ -49,6 +49,11 @@ public enum Converter {
     /// Pages are classified on a cheap render at this resolution, so the
     /// text/photo decision doesn't shift when the user changes dpi caps.
     static let probeDpi = 100
+    /// OCR input is capped here: Vision normalises resolution internally,
+    /// and measured accuracy at 150 dpi grayscale equals or beats the
+    /// 300 dpi 1-bit page (antialiasing helps it) at ~2.4x less time —
+    /// OCR dominates per-page wall clock.
+    static let ocrDpi = 150
 
     public struct FileResult {
         public let inputBytes: Int
@@ -124,12 +129,18 @@ public enum Converter {
             // destroys legibility → grayscale.
             let isText = PageClassifier.classify(probe) == .text
             var g4: (stream: G4.Stream, page: Pipeline.ProcessedPage)?
+            var g4OCRImage: CGImage?
             var demotedGray: Pipeline.GrayImage?
             if isText, nativeDpi >= settings.minG4Dpi {
                 let gray = try preparedGray(dpi: textDpi, clean: cleanText)
                 let bw = Binarize.sauvola(gray, dpi: textDpi)
                 if Binarize.damage(gray, bw) <= settings.maxG4Damage {
                     g4 = try encodeG4(binarized: bw, dpi: textDpi)
+                    // OCR reads the grayscale, downsampled to ocrDpi —
+                    // better for Vision than the 1-bit page, and much
+                    // faster. Word boxes are normalised, so the text
+                    // layer is unaffected.
+                    g4OCRImage = ocrInput(gray, at: textDpi).cgImage
                 } else {
                     // Binarisation measurably destroys a region — stay
                     // grayscale, reusing this render instead of
@@ -141,9 +152,9 @@ public enum Converter {
             let content: PDFWriter.Content
             let ocrImage: CGImage?
             let dpi: Int
-            if let (stream, packed) = g4 {
+            if let (stream, _) = g4 {
                 content = .g4(stream)
-                ocrImage = packed.cgImage
+                ocrImage = g4OCRImage
                 dpi = textDpi
                 kinds.append(.text)
             } else {
@@ -162,7 +173,7 @@ public enum Converter {
                     try isText && settings.demotedTextFormat == .gray4
                     ? .gray4Flate(Gray4.encode(gray))
                     : jpegContent(gray, quality: settings.jpegQuality, dpi: dpi)
-                ocrImage = gray.cgImage
+                ocrImage = ocrInput(gray, at: dpi).cgImage
                 kinds.append(.photo)
             }
             var words: [OCR.Word] = []
@@ -185,6 +196,13 @@ public enum Converter {
             inputBytes: report.fileBytes, outputBytes: data.count,
             converted: true, pageKinds: kinds
         )
+    }
+
+    /// Downsample OCR input to ocrDpi when the render exceeds it.
+    private static func ocrInput(
+        _ gray: Pipeline.GrayImage, at dpi: Int
+    ) -> Pipeline.GrayImage {
+        dpi > ocrDpi ? gray.resampled(scale: Double(ocrDpi) / Double(dpi)) : gray
     }
 
     private static func jpegContent(

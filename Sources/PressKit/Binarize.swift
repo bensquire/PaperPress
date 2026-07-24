@@ -174,6 +174,14 @@ public enum Binarize {
     /// faded certificates, and still white on paper grain and typical
     /// bleed-through. The window scales with dpi (~1/6 inch) so behaviour
     /// is resolution-stable.
+    /// Rows thresholded per band. Integral tables are built per band over
+    /// just the rows the band's windows can reach, so transient memory is
+    /// O(width × band) — ~7 MB — instead of two full-page UInt64 tables
+    /// (~140 MB for an A4 at 300 dpi). The overlapping ±r rows are
+    /// recomputed per band; the integral build is a small fraction of the
+    /// pass, so the recompute is cheap.
+    static let sauvolaBandRows = 128
+
     public static func sauvola(
         _ g: Pipeline.GrayImage, dpi: Int, k: Double = 0.15
     ) -> Pipeline.BinaryImage {
@@ -181,54 +189,74 @@ public enum Binarize {
         let window = max(25, dpi / 6) | 1
         let r = window / 2
 
-        // Integral images of value and value² over a (w+1)×(h+1) grid.
-        var sum = [UInt64](repeating: 0, count: (w + 1) * (h + 1))
-        var sumSq = [UInt64](repeating: 0, count: (w + 1) * (h + 1))
-        for y in 0..<h {
-            var rowSum: UInt64 = 0
-            var rowSq: UInt64 = 0
-            let above = y * (w + 1)
-            let here = (y + 1) * (w + 1)
-            for x in 0..<w {
-                let v = UInt64(g.pixels[y * w + x])
-                rowSum += v
-                rowSq += v * v
-                sum[here + x + 1] = sum[above + x + 1] + rowSum
-                sumSq[here + x + 1] = sumSq[above + x + 1] + rowSq
-            }
-        }
-
         var ink = [Bool](repeating: false, count: w * h)
-        // Unsafe buffers: this loop touches ~10 subscripts per pixel and
-        // bounds checks measurably dominate it on 8+ Mpx pages.
-        sum.withUnsafeBufferPointer { sumBuf in
-            sumSq.withUnsafeBufferPointer { sqBuf in
-                g.pixels.withUnsafeBufferPointer { pix in
-                    ink.withUnsafeMutableBufferPointer { out in
-                        for y in 0..<h {
-                            let y0 = max(0, y - r), y1 = min(h, y + r + 1)
-                            let a = y0 * (w + 1), b = y1 * (w + 1)
-                            let rowBase = y * w
-                            for x in 0..<w {
-                                let x0 = max(0, x - r), x1 = min(w, x + r + 1)
-                                let n = Double((y1 - y0) * (x1 - x0))
-                                let s1 = Double(
-                                    sumBuf[b + x1] &+ sumBuf[a + x0]
-                                        &- sumBuf[a + x1] &- sumBuf[b + x0])
-                                let s2 = Double(
-                                    sqBuf[b + x1] &+ sqBuf[a + x0]
-                                        &- sqBuf[a + x1] &- sqBuf[b + x0])
-                                let mean = s1 / n
-                                let variance = max(0, s2 / n - mean * mean)
-                                let t =
-                                    mean
-                                    * (1 + k * (variance.squareRoot() / dynamicRange - 1))
-                                out[rowBase + x] = Double(pix[rowBase + x]) < t
+        let stride = w + 1
+        let maxStripRows = sauvolaBandRows + 2 * r + 1
+        // Integral strips of value and value², reused across bands.
+        var sum = [UInt64](repeating: 0, count: stride * (maxStripRows + 1))
+        var sumSq = [UInt64](repeating: 0, count: stride * (maxStripRows + 1))
+
+        var bandStart = 0
+        while bandStart < h {
+            let bandEnd = min(h, bandStart + sauvolaBandRows)
+            // Strip covers every row the band's windows can touch.
+            let stripStart = max(0, bandStart - r)
+            let stripEnd = min(h, bandEnd + r)
+
+            // Unsafe buffers: these loops touch ~10 subscripts per pixel
+            // and bounds checks measurably dominate at 8+ Mpx.
+            sum.withUnsafeMutableBufferPointer { sumBuf in
+                sumSq.withUnsafeMutableBufferPointer { sqBuf in
+                    g.pixels.withUnsafeBufferPointer { pix in
+                        ink.withUnsafeMutableBufferPointer { out in
+                            for i in 0..<stride {
+                                sumBuf[i] = 0
+                                sqBuf[i] = 0
+                            }
+                            for sy in 0..<(stripEnd - stripStart) {
+                                var rowSum: UInt64 = 0
+                                var rowSq: UInt64 = 0
+                                let src = (stripStart + sy) * w
+                                let above = sy * stride
+                                let here = (sy + 1) * stride
+                                sumBuf[here] = 0
+                                sqBuf[here] = 0
+                                for x in 0..<w {
+                                    let v = UInt64(pix[src + x])
+                                    rowSum += v
+                                    rowSq += v * v
+                                    sumBuf[here + x + 1] = sumBuf[above + x + 1] + rowSum
+                                    sqBuf[here + x + 1] = sqBuf[above + x + 1] + rowSq
+                                }
+                            }
+                            for y in bandStart..<bandEnd {
+                                let y0 = max(0, y - r), y1 = min(h, y + r + 1)
+                                let a = (y0 - stripStart) * stride
+                                let b = (y1 - stripStart) * stride
+                                let rowBase = y * w
+                                for x in 0..<w {
+                                    let x0 = max(0, x - r), x1 = min(w, x + r + 1)
+                                    let n = Double((y1 - y0) * (x1 - x0))
+                                    let s1 = Double(
+                                        sumBuf[b + x1] &+ sumBuf[a + x0]
+                                            &- sumBuf[a + x1] &- sumBuf[b + x0])
+                                    let s2 = Double(
+                                        sqBuf[b + x1] &+ sqBuf[a + x0]
+                                            &- sqBuf[a + x1] &- sqBuf[b + x0])
+                                    let mean = s1 / n
+                                    let variance = max(0, s2 / n - mean * mean)
+                                    let t =
+                                        mean
+                                        * (1 + k
+                                            * (variance.squareRoot() / dynamicRange - 1))
+                                    out[rowBase + x] = Double(pix[rowBase + x]) < t
+                                }
                             }
                         }
                     }
                 }
             }
+            bandStart = bandEnd
         }
         return Pipeline.BinaryImage(width: w, height: h, ink: ink)
     }
