@@ -26,11 +26,12 @@ public enum Converter {
         /// res, so resolution gates first and measurement only backstops
         /// adequate-resolution pages.
         public var minG4Dpi = 150
-        /// Backstop for pages at or above minG4Dpi: measured binarisation
-        /// damage (see Binarize.damage) above this stays grayscale.
-        /// Verified-crisp 100-300 dpi pages score 0.07-0.16 and no page in
-        /// that range has ever been flagged degraded.
-        public var maxG4Damage = 0.16
+        /// Backstop for pages at or above minG4Dpi: worst-region
+        /// binarisation damage (see Binarize.damage) above this stays
+        /// grayscale. With tile-local scoring, verified-crisp pages
+        /// measure 0.12-0.37 (the top end is accepted faint-content loss)
+        /// and every visibly degraded page measures >= 0.42.
+        public var maxG4Damage = 0.40
         /// Format for those demoted text pages. 4-bit grayscale is both
         /// smaller than JPEG q0.6 on document content and crisper (no DCT
         /// ringing); JPEG remains for anyone preferring smooth tones.

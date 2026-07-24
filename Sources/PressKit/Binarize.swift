@@ -20,6 +20,15 @@ public enum Binarize {
     /// …AND its local range exceeds this (× contrast) — text strokes, not
     /// flat decorative gray, which 1-bit legitimately drops.
     static let contentContrastGate = 0.3
+    /// Tile edge in blocks (~1 inch at 300 dpi with 4px blocks): the
+    /// granularity at which "worst region" is judged.
+    static let tileBlocks = 64
+    /// A tile needs at least this many content blocks to be scored —
+    /// stray marks in an otherwise empty tile are not a "region".
+    static let minTileContentBlocks = 24
+    /// A tile's ink/paper levels come from its own pixels when at least
+    /// this many fall in the class; otherwise the page-level fallback.
+    static let minTileClassPixels = 50.0
 
     /// Ink and paper class means at the Otsu split, derived from the
     /// histogram in O(256) — the same quantities Otsu's search computes
@@ -50,13 +59,18 @@ public enum Binarize {
         return best
     }
 
-    /// How much a binarisation damaged a page, 0…1-ish. Both images are
-    /// box-downsampled and the binary one is mapped back onto the gray
-    /// ink/paper levels; the score is their mean disagreement over content
-    /// blocks, normalised by the ink-paper contrast. Legible binarisation
-    /// reproduces the downsampled gray closely (small print blurs the same
-    /// way in both); destroyed print — merged or fragmented strokes —
-    /// diverges hard.
+    /// How much a binarisation damaged a page, 0…1-ish, judged by its
+    /// WORST region: a reader condemns a page for one destroyed column,
+    /// and a page mean lets a crisp centre dilute it (three successive
+    /// threshold calibrations were falsified by exactly that).
+    ///
+    /// Both images are box-downsampled; per ~1-inch tile, the binary is
+    /// mapped back onto the tile's OWN ink/paper gray levels and compared
+    /// against the gray. Tile-local levels make the score tone-invariant:
+    /// faint print rendered solid black — a rescue, not damage — agrees
+    /// with itself, while merged strokes, filled counters, and lost
+    /// strokes still diverge. The page score is the worst tile with
+    /// enough content.
     public static func damage(
         _ g: Pipeline.GrayImage, _ bw: Pipeline.BinaryImage, block: Int = 4
     ) -> Double {
@@ -68,8 +82,32 @@ public enum Binarize {
         let contrast = paperLevel - inkLevel
         guard contrast > minContrast else { return 0 }
 
-        var diffSum = 0.0
-        var blocks = 0.0
+        let tw = (sw + tileBlocks - 1) / tileBlocks
+        let th = (sh + tileBlocks - 1) / tileBlocks
+
+        // Pass 1: per-tile ink/paper gray levels, classified by the binary.
+        var inkSum = [Double](repeating: 0, count: tw * th)
+        var inkN = [Double](repeating: 0, count: tw * th)
+        var papSum = [Double](repeating: 0, count: tw * th)
+        var papN = [Double](repeating: 0, count: tw * th)
+        for y in 0..<(sh * block) {
+            let ty = (y / block) / tileBlocks
+            for x in 0..<(sw * block) {
+                let t = ty * tw + (x / block) / tileBlocks
+                let v = Double(g.pixels[y * w + x])
+                if bw.ink[y * w + x] {
+                    inkSum[t] += v
+                    inkN[t] += 1
+                } else {
+                    papSum[t] += v
+                    papN[t] += 1
+                }
+            }
+        }
+
+        // Pass 2: per-block disagreement against tile-local levels.
+        var tileDiff = [Double](repeating: 0, count: tw * th)
+        var tileCount = [Double](repeating: 0, count: tw * th)
         for by in 0..<sh {
             for bx in 0..<sw {
                 var gSum = 0.0
@@ -92,12 +130,20 @@ public enum Binarize {
                 guard gMean < paperLevel - contentDarknessGate * contrast,
                     gMax - gMin > contentContrastGate * contrast
                 else { continue }
-                let bMean = (inkFrac / n) * inkLevel + (1 - inkFrac / n) * paperLevel
-                diffSum += abs(bMean - gMean) / contrast
-                blocks += 1
+                let t = (by / tileBlocks) * tw + (bx / tileBlocks)
+                let tInk = inkN[t] > minTileClassPixels ? inkSum[t] / inkN[t] : inkLevel
+                let tPap = papN[t] > minTileClassPixels ? papSum[t] / papN[t] : paperLevel
+                let tContrast = max(tPap - tInk, 0.3 * contrast)
+                let bMean = (inkFrac / n) * tInk + (1 - inkFrac / n) * tPap
+                tileDiff[t] += abs(bMean - gMean) / tContrast
+                tileCount[t] += 1
             }
         }
-        return blocks > 0 ? diffSum / blocks : 0
+        var worst = 0.0
+        for t in 0..<(tw * th) where tileCount[t] >= Double(minTileContentBlocks) {
+            worst = max(worst, tileDiff[t] / tileCount[t])
+        }
+        return worst
     }
 
     /// Adaptive threshold. `k` controls strictness (higher = less ink);
