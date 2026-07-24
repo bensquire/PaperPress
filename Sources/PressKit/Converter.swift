@@ -18,14 +18,18 @@ public enum Converter {
         /// Output must be at least this fraction smaller than the input,
         /// else the original is copied through unchanged.
         public var minSavingFraction = 0.2
-        /// A binarised text page whose measured damage (see
-        /// Binarize.damage) exceeds this stays grayscale instead:
-        /// print too small for the source resolution cannot survive any
-        /// threshold, and legibility beats compression. Calibrated by
-        /// magnified inspection of real receipts and certificates:
-        /// visually crisp pages score <= 0.153, pages with any visible
-        /// thickening/clogging >= 0.173. (Each earlier, laxer value was
-        /// falsified by side-by-side crops of a real document.)
+        /// Text pages scanned below this resolution always stay grayscale.
+        /// Every page the user flagged as degraded across three
+        /// calibration rounds was a 75 dpi source, and every verified-crisp
+        /// page was 100 dpi or better; per-page damage metrics (page mean,
+        /// worst tile, tile decorrelation) each had a blind spot at low
+        /// res, so resolution gates first and measurement only backstops
+        /// adequate-resolution pages.
+        public var minG4Dpi = 150
+        /// Backstop for pages at or above minG4Dpi: measured binarisation
+        /// damage (see Binarize.damage) above this stays grayscale.
+        /// Verified-crisp 100-300 dpi pages score 0.07-0.16 and no page in
+        /// that range has ever been flagged degraded.
         public var maxG4Damage = 0.16
         /// Format for those demoted text pages. 4-bit grayscale is both
         /// smaller than JPEG q0.6 on document content and crisper (no DCT
@@ -88,6 +92,12 @@ public enum Converter {
         let probeRenderDpi = min(probeDpi, textDpi)
         for i in 1...doc.numberOfPages {
             guard let page = doc.page(at: i) else { continue }
+            let nativeDpi: Int =
+                if case let .scan(d, _) = report.pages[i - 1].kind {
+                    d
+                } else {
+                    settings.dpiCap  // born-digital page in a mixed file
+                }
             var probe = try PDFRender.gray(page: page, dpi: probeRenderDpi)
             if settings.removeScanEdges {
                 // Clean before classifying: a heavy edge band would
@@ -96,11 +106,14 @@ public enum Converter {
                 EdgeClean.removeScanBorders(&probe, dpi: probeRenderDpi)
             }
 
-            // The encoding ladder: classified text → G4, unless
-            // binarisation measurably destroys legibility → grayscale.
+            // The encoding ladder: classified text → G4, unless the source
+            // is too low-res to binarise or binarisation measurably
+            // destroys legibility → grayscale (text keeps the configured
+            // grayscale format; photos are always JPEG).
+            let isText = PageClassifier.classify(probe) == .text
             var g4: (stream: G4.Stream, page: Pipeline.ProcessedPage)?
             var demotedGray: Pipeline.GrayImage?
-            if PageClassifier.classify(probe) == .text {
+            if isText, nativeDpi >= settings.minG4Dpi {
                 var gray: Pipeline.GrayImage
                 if textDpi == probeRenderDpi {
                     gray = probe  // already cleaned
@@ -130,27 +143,22 @@ public enum Converter {
                 dpi = textDpi
                 kinds.append(.text)
             } else {
-                let nativeDpi: Int =
-                    if case let .scan(d, _) = report.pages[i - 1].kind {
-                        d
-                    } else {
-                        settings.photoDpiCap
-                    }
                 dpi = max(72, min(nativeDpi, settings.photoDpiCap))
                 let gray: Pipeline.GrayImage
                 if let demotedGray {
                     gray = demotedGray.resampled(scale: Double(dpi) / Double(textDpi))
-                    content =
-                        try settings.demotedTextFormat == .gray4
-                        ? .gray4Flate(Gray4.encode(gray))
-                        : jpegContent(gray, quality: settings.jpegQuality, dpi: dpi)
                 } else {
                     gray =
                         dpi == probeRenderDpi
                         ? probe
                         : try PDFRender.gray(page: page, dpi: dpi)
-                    content = try jpegContent(gray, quality: settings.jpegQuality, dpi: dpi)
                 }
+                // Text (demoted by resolution or damage) keeps the
+                // configured grayscale format; photos are always JPEG.
+                content =
+                    try isText && settings.demotedTextFormat == .gray4
+                    ? .gray4Flate(Gray4.encode(gray))
+                    : jpegContent(gray, quality: settings.jpegQuality, dpi: dpi)
                 ocrImage = gray.cgImage
                 kinds.append(.photo)
             }

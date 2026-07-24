@@ -155,6 +155,30 @@ final class ConverterTests: FixtureTestCase {
         XCTAssertNil(written.range(of: Data("DCTDecode".utf8)))
     }
 
+    func test_convert_lowResTextPage_staysGrayscaleEvenWhenCrisp() throws {
+        // Arrange — large clean type, but a 75 dpi source: the resolution
+        // gate demotes without consulting the damage metric (three
+        // calibration rounds showed 75 dpi sources always degrade
+        // somewhere on the page)
+        let crisp = Fixtures.renderedTextPage(fontSize: 20, ink: 0.1)
+        let src = Fixtures.write(
+            Fixtures.scannedPDF(pages: [crisp], dpi: 75), to: dir, name: "crisp75.pdf"
+        )
+        let out = dir.appendingPathComponent("out/crisp75.pdf")
+        let report = try PDFInspector.inspect(src)
+        var settings = noOCR
+        settings.minSavingFraction = -1
+
+        // Act
+        let result = try Converter.convert(report: report, to: out, settings: settings)
+
+        // Assert
+        XCTAssertEqual(result.pageKinds, [.photo])
+        XCTAssertNil(
+            try Data(contentsOf: out).range(of: Data("CCITTFaxDecode".utf8))
+        )
+    }
+
     func test_convert_demotedTextPage_respectsJPEGSetting() throws {
         // Arrange
         let out = dir.appendingPathComponent("out/tiny.pdf")
