@@ -61,7 +61,13 @@ public enum Converter {
             } else {
                 nativeDpi = settings.dpiCap  // born-digital page in a mixed file
             }
-            let textDpi = max(72, min(nativeDpi, settings.dpiCap))
+            // Text pages render at the cap even when the source is
+            // lower-res: a low-dpi grayscale scan carries sub-pixel detail
+            // in its antialiasing, and thresholding at native resolution
+            // destroys it (jagged text). Upsampling first turns that
+            // antialiasing back into smooth 1-bit edges. Photo pages keep
+            // native — JPEG preserves the grayscale as-is.
+            let textDpi = max(72, settings.dpiCap)
 
             let probe = try PDFRender.gray(page: page, dpi: min(probeDpi, textDpi))
             let kind = PageClassifier.classify(probe)

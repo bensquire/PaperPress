@@ -40,11 +40,12 @@ compact PDFs at scan time.
   *Re-compress* (fat raster scans), *Born digital* (real text/vector
   PDFs that rasterising would only ruin), *Already 1-bit*, or *Already
   small*. Nothing is written until you confirm.
-- **Tiny archival pages** — scan pages are re-rendered at their native
-  resolution (capped at 300 dpi, never upsampled), binarised with a
-  locally adaptive threshold (Sauvola — faded print survives alongside
-  bold print), despeckled, and stored with CCITT G4 fax compression:
-  **~20 KB per A4 page**.
+- **Tiny archival pages** — scan pages are re-rendered at 300 dpi
+  (higher-res sources are downsampled; lower-res sources are upsampled
+  so the antialiasing they carry becomes smooth 1-bit edges rather than
+  jagged text), binarised with a locally adaptive threshold (Sauvola —
+  faded print survives alongside bold print), despeckled, and stored
+  with CCITT G4 fax compression: **~20 KB per A4 page**.
 - **Photos survive** — pages that are actually photographic (histogram
   and local-contrast analysis, not guesswork) are kept as grayscale
   JPEG instead of being dithered to mush. One document can mix both.
@@ -108,7 +109,10 @@ scripts/               # DMG packaging
 ## How a 5 MB scan becomes 20 KB per page
 
 1. The page's embedded scan image is found and its true resolution
-   measured; the page is re-rendered at that dpi (max 300).
+   measured; the page is re-rendered at 300 dpi — low-res sources are
+   interpolated up first, because their grayscale antialiasing carries
+   sub-pixel detail that thresholding at native resolution would
+   destroy.
 2. A histogram + spatial pass decides: document or photo?
 3. Documents: locally adaptive threshold (Sauvola) → 1-bit, speckles
    removed, packed and G4-compressed — the same encoding fax machines
