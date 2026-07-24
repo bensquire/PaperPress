@@ -84,13 +84,19 @@ final class BinarizeTests: XCTestCase {
         // fail if the metric itself drifts, even when pages don't cross
         // the threshold. Bands are wide enough to absorb CoreText
         // rendering variation across OS versions.
+
+        // Arrange — tiny and normal print, upsampled 4× as the converter
+        // treats a 75 dpi source
         let tiny = Fixtures.renderedTextPage(fontSize: 4, ink: 0.3).resampled(scale: 4)
+        let normal = Fixtures.renderedTextPage(fontSize: 14, ink: 0.1).resampled(scale: 4)
+
+        // Act
         let tinyScore = Binarize.damage(tiny, Binarize.sauvola(tiny, dpi: 300))
+        let normalScore = Binarize.damage(normal, Binarize.sauvola(normal, dpi: 300))
+
+        // Assert — each anchor holds its band, and the ordering holds
         XCTAssertGreaterThan(tinyScore, 0.15)
         XCTAssertLessThan(tinyScore, 0.35)
-
-        let normal = Fixtures.renderedTextPage(fontSize: 14, ink: 0.1).resampled(scale: 4)
-        let normalScore = Binarize.damage(normal, Binarize.sauvola(normal, dpi: 300))
         XCTAssertGreaterThan(normalScore, 0.12)
         XCTAssertLessThan(normalScore, 0.30)
         XCTAssertGreaterThan(tinyScore, normalScore, "smaller print must score worse")
