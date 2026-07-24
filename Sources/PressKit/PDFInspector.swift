@@ -99,11 +99,11 @@ public enum PDFInspector {
         )
     }
 
-    /// The processing resolution Converter uses for text pages (mirrors
-    /// Converter.Settings.dpiCap's default — the inspector has no Settings).
-    static let assumedTextDpi = 300.0
-    /// Mirrors Converter.Settings.minG4Dpi's default.
-    static let assumedMinG4Dpi = 150
+    /// The processing resolution Converter uses for text pages — read
+    /// from the library defaults so the estimate can't drift from the
+    /// converter (the inspector has no per-run Settings).
+    static let assumedTextDpi = Double(Converter.Settings().dpiCap)
+    static let assumedMinG4Dpi = Converter.Settings().minG4Dpi
     /// 4-bit grayscale output density at native resolution (measured).
     static let estimatedGray4BytesPerPixel = 0.11
 

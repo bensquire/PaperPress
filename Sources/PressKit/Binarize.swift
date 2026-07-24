@@ -29,6 +29,10 @@ public enum Binarize {
     /// A tile's ink/paper levels come from its own pixels when at least
     /// this many fall in the class; otherwise the page-level fallback.
     static let minTileClassPixels = 50.0
+    /// Floor on tile-local contrast (× page contrast) so flat or
+    /// near-empty tiles don't divide by a vanishing denominator. Distinct
+    /// from contentContrastGate despite the coincidental value.
+    static let minTileContrastFraction = 0.3
 
     /// Ink and paper class means at the Otsu split, derived from the
     /// histogram in O(256) — the same quantities Otsu's search computes
@@ -85,23 +89,41 @@ public enum Binarize {
         let tw = (sw + tileBlocks - 1) / tileBlocks
         let th = (sh + tileBlocks - 1) / tileBlocks
 
+        // Pixel area the block grid covers; both passes ignore the
+        // remainder beyond it.
+        let cw = sw * block
+        let ch = sh * block
+        let tilePx = block * tileBlocks
+
         // Pass 1: per-tile ink/paper gray levels, classified by the binary.
+        // Iterated in tile-column runs so the tile index is loop-invariant.
         var inkSum = [Double](repeating: 0, count: tw * th)
         var inkN = [Double](repeating: 0, count: tw * th)
         var papSum = [Double](repeating: 0, count: tw * th)
         var papN = [Double](repeating: 0, count: tw * th)
-        for y in 0..<(sh * block) {
-            let ty = (y / block) / tileBlocks
-            for x in 0..<(sw * block) {
-                let t = ty * tw + (x / block) / tileBlocks
-                let v = Double(g.pixels[y * w + x])
-                if bw.ink[y * w + x] {
-                    inkSum[t] += v
-                    inkN[t] += 1
-                } else {
-                    papSum[t] += v
-                    papN[t] += 1
+        for y in 0..<ch {
+            let rowBase = y * w
+            let tileRow = (y / block) / tileBlocks * tw
+            for tx in 0..<tw {
+                let t = tileRow + tx
+                var iS = 0.0
+                var iN = 0.0
+                var pS = 0.0
+                var pN = 0.0
+                for x in (tx * tilePx)..<min(cw, (tx + 1) * tilePx) {
+                    let v = Double(g.pixels[rowBase + x])
+                    if bw.ink[rowBase + x] {
+                        iS += v
+                        iN += 1
+                    } else {
+                        pS += v
+                        pN += 1
+                    }
                 }
+                inkSum[t] += iS
+                inkN[t] += iN
+                papSum[t] += pS
+                papN[t] += pN
             }
         }
 
@@ -133,7 +155,7 @@ public enum Binarize {
                 let t = (by / tileBlocks) * tw + (bx / tileBlocks)
                 let tInk = inkN[t] > minTileClassPixels ? inkSum[t] / inkN[t] : inkLevel
                 let tPap = papN[t] > minTileClassPixels ? papSum[t] / papN[t] : paperLevel
-                let tContrast = max(tPap - tInk, 0.3 * contrast)
+                let tContrast = max(tPap - tInk, minTileContrastFraction * contrast)
                 let bMean = (inkFrac / n) * tInk + (1 - inkFrac / n) * tPap
                 tileDiff[t] += abs(bMean - gMean) / tContrast
                 tileCount[t] += 1

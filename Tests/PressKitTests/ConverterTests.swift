@@ -128,8 +128,9 @@ final class ConverterTests: FixtureTestCase {
         XCTAssertEqual(try Data(contentsOf: src), data)
     }
 
-    /// Tiny print at low resolution — forces damage-based demotion.
-    private func demotedTinyReport() throws -> PDFInspector.Report {
+    /// A 75 dpi text source — demoted by the resolution gate (the damage
+    /// backstop is covered at the Binarize unit level).
+    private func lowResTextReport() throws -> PDFInspector.Report {
         let tiny = Fixtures.renderedTextPage(fontSize: 4, ink: 0.3)
         let src = Fixtures.write(
             Fixtures.scannedPDF(pages: [tiny], dpi: 75), to: dir, name: "tiny.pdf"
@@ -145,7 +146,7 @@ final class ConverterTests: FixtureTestCase {
 
         // Act
         let result = try Converter.convert(
-            report: try demotedTinyReport(), to: out, settings: settings
+            report: try lowResTextReport(), to: out, settings: settings
         )
 
         // Assert — demoted, and encoded as 4-bit Flate, not JPEG
@@ -188,7 +189,7 @@ final class ConverterTests: FixtureTestCase {
 
         // Act
         _ = try Converter.convert(
-            report: try demotedTinyReport(), to: out, settings: settings
+            report: try lowResTextReport(), to: out, settings: settings
         )
 
         // Assert

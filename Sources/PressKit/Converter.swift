@@ -18,19 +18,14 @@ public enum Converter {
         /// Output must be at least this fraction smaller than the input,
         /// else the original is copied through unchanged.
         public var minSavingFraction = 0.2
-        /// Text pages scanned below this resolution always stay grayscale.
-        /// Every page the user flagged as degraded across three
-        /// calibration rounds was a 75 dpi source, and every verified-crisp
-        /// page was 100 dpi or better; per-page damage metrics (page mean,
-        /// worst tile, tile decorrelation) each had a blind spot at low
-        /// res, so resolution gates first and measurement only backstops
-        /// adequate-resolution pages.
+        /// Text pages scanned below this resolution always stay grayscale
+        /// — low-res sources always degrade somewhere under 1-bit.
+        /// Calibration record: BinarizeTests.test_damage_calibrationAnchors.
         public var minG4Dpi = 150
         /// Backstop for pages at or above minG4Dpi: worst-region
         /// binarisation damage (see Binarize.damage) above this stays
-        /// grayscale. With tile-local scoring, verified-crisp pages
-        /// measure 0.12-0.37 (the top end is accepted faint-content loss)
-        /// and every visibly degraded page measures >= 0.42.
+        /// grayscale (verified-crisp <= 0.37, degraded >= 0.42; record in
+        /// BinarizeTests.test_damage_calibrationAnchors).
         public var maxG4Damage = 0.40
         /// Format for those demoted text pages. 4-bit grayscale is both
         /// smaller than JPEG q0.6 on document content and crisper (no DCT
@@ -100,37 +95,45 @@ public enum Converter {
                     settings.dpiCap  // born-digital page in a mixed file
                 }
             var probe = try PDFRender.gray(page: page, dpi: probeRenderDpi)
-            if settings.removeScanEdges {
+            let probeCleaned = settings.removeScanEdges
+            if probeCleaned {
                 // Clean before classifying: a heavy edge band would
                 // otherwise read as photo content — the one path where
                 // the cleanup would never run.
                 EdgeClean.removeScanBorders(&probe, dpi: probeRenderDpi)
             }
 
+            // The one seam for obtaining a page render: callers state the
+            // cleaning policy and cannot skip or wrongly inherit it — the
+            // probe is reused only when its cleaning state matches. (Two
+            // regressions came from branches hand-wiring render+clean.)
+            func preparedGray(dpi: Int, clean: Bool) throws -> Pipeline.GrayImage {
+                if dpi == probeRenderDpi, clean == probeCleaned {
+                    return probe
+                }
+                var g = try PDFRender.gray(page: page, dpi: dpi)
+                if clean {
+                    EdgeClean.removeScanBorders(&g, dpi: dpi)
+                }
+                return g
+            }
+            let cleanText = settings.removeScanEdges
+
             // The encoding ladder: classified text → G4, unless the source
             // is too low-res to binarise or binarisation measurably
-            // destroys legibility → grayscale (text keeps the configured
-            // grayscale format; photos are always JPEG).
+            // destroys legibility → grayscale.
             let isText = PageClassifier.classify(probe) == .text
             var g4: (stream: G4.Stream, page: Pipeline.ProcessedPage)?
             var demotedGray: Pipeline.GrayImage?
             if isText, nativeDpi >= settings.minG4Dpi {
-                var gray: Pipeline.GrayImage
-                if textDpi == probeRenderDpi {
-                    gray = probe  // already cleaned
-                } else {
-                    gray = try PDFRender.gray(page: page, dpi: textDpi)
-                    if settings.removeScanEdges {
-                        EdgeClean.removeScanBorders(&gray, dpi: textDpi)
-                    }
-                }
+                let gray = try preparedGray(dpi: textDpi, clean: cleanText)
                 let bw = Binarize.sauvola(gray, dpi: textDpi)
                 if Binarize.damage(gray, bw) <= settings.maxG4Damage {
                     g4 = try encodeG4(binarized: bw, dpi: textDpi)
                 } else {
-                    // Print too small for the source resolution — no
-                    // threshold keeps it legible. Stay grayscale, reusing
-                    // this render instead of rasterising a third time.
+                    // Binarisation measurably destroys a region — stay
+                    // grayscale, reusing this render instead of
+                    // rasterising again.
                     demotedGray = gray
                 }
             }
@@ -145,20 +148,13 @@ public enum Converter {
                 kinds.append(.text)
             } else {
                 dpi = max(72, min(nativeDpi, settings.photoDpiCap))
-                var gray: Pipeline.GrayImage
+                let gray: Pipeline.GrayImage
                 if let demotedGray {
-                    // Damage-demoted: reusing the full-res render, already
-                    // edge-cleaned.
                     gray = demotedGray.resampled(scale: Double(dpi) / Double(textDpi))
-                } else if dpi == probeRenderDpi {
-                    gray = probe  // already cleaned
                 } else {
-                    gray = try PDFRender.gray(page: page, dpi: dpi)
-                    // Resolution-demoted text renders fresh here and needs
-                    // its own edge cleaning; photos are never cleaned.
-                    if isText, settings.removeScanEdges {
-                        EdgeClean.removeScanBorders(&gray, dpi: dpi)
-                    }
+                    // Photos are never edge-cleaned — they may be
+                    // legitimately dark at the edges.
+                    gray = try preparedGray(dpi: dpi, clean: isText && cleanText)
                 }
                 // Text (demoted by resolution or damage) keeps the
                 // configured grayscale format; photos are always JPEG.

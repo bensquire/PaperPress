@@ -78,19 +78,6 @@ final class BinarizeTests: XCTestCase {
         XCTAssertLessThan(damage, Converter.Settings().maxG4Damage - 0.05)
     }
 
-    func test_damage_tinyPrint_scoresWellAboveNormalPrint() {
-        // Real letterforms at ~4px vs ~14px, upsampled 4× as the converter
-        // treats a 75 dpi source. Clean synthetic renders can't reproduce
-        // the full degradation of real scanner noise (real degraded pages
-        // measure >= 0.42), so this asserts ordering and floor, not a
-        // threshold crossing — the shipped threshold's evidence is the
-        // real-document corpus recorded in Converter.Settings.
-        let tiny = Fixtures.renderedTextPage(fontSize: 4, ink: 0.3)
-            .resampled(scale: 4)
-        let tinyScore = Binarize.damage(tiny, Binarize.sauvola(tiny, dpi: 300))
-        XCTAssertGreaterThan(tinyScore, 0.15)
-    }
-
     func test_damage_calibrationAnchors_holdWithinTolerance() {
         // The worst-region metric's evidence: real crisp pages measure
         // 0.12-0.37, real degraded ones >= 0.42. These fixture anchors
@@ -106,6 +93,7 @@ final class BinarizeTests: XCTestCase {
         let normalScore = Binarize.damage(normal, Binarize.sauvola(normal, dpi: 300))
         XCTAssertGreaterThan(normalScore, 0.12)
         XCTAssertLessThan(normalScore, 0.30)
+        XCTAssertGreaterThan(tinyScore, normalScore, "smaller print must score worse")
     }
 
     func test_damage_erasedInk_scoresHigh() {

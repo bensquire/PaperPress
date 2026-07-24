@@ -11,11 +11,7 @@ final class EdgeCleanTests: XCTestCase {
     func test_removeScanBorders_whitensEdgeBand() {
         // Arrange — a 30px black band down the left edge (scan artifact)
         var g = page()
-        for y in 0..<800 {
-            for x in 0..<30 {
-                g.pixels[y * 600 + x] = 10
-            }
-        }
+        Fixtures.addLeftBand(to: &g, widthPx: 30, level: 10)
 
         // Act
         EdgeClean.removeScanBorders(&g, dpi: 300)
@@ -63,11 +59,7 @@ final class EdgeCleanConverterTests: FixtureTestCase {
         // left edge: the resolution gate demotes it to grayscale, and the
         // band must still be cleaned on that path
         var page = Fixtures.textPage(width: 620, height: 800, noise: true)
-        for y in 0..<800 {
-            for x in 0..<12 {
-                page.pixels[y * 620 + x] = 10
-            }
-        }
+        Fixtures.addLeftBand(to: &page, widthPx: 12, level: 10)
         let src = Fixtures.write(
             Fixtures.scannedPDF(pages: [page], dpi: 75), to: dir, name: "band.pdf"
         )

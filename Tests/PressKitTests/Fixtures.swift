@@ -82,6 +82,17 @@ enum Fixtures {
         return Pipeline.GrayImage(width: width, height: height, pixels: pixels)
     }
 
+    /// Paint a dark scan-style band down the left edge of a page.
+    static func addLeftBand(
+        to page: inout Pipeline.GrayImage, widthPx: Int, level: UInt8
+    ) {
+        for y in 0..<page.height {
+            for x in 0..<widthPx {
+                page.pixels[y * page.width + x] = level
+            }
+        }
+    }
+
     /// A continuous-tone page: smooth diagonal gradient.
     static func photoPage(width: Int = 600, height: Int = 800) -> Pipeline.GrayImage {
         var pixels = [UInt8](repeating: 0, count: width * height)
