@@ -81,8 +81,8 @@ struct ContentView: View {
 
     @State private var dropHovering = false
 
-    /// Gather every dropped URL (PDFs and folders), then hand them to the
-    /// model in one call. Returns false if the drag carries no file URLs.
+    /// Gather every dropped URL, then hand them to the model in one call.
+    /// FolderScanner owns the "what counts as a source" filtering.
     private func handleDrop(_ providers: [NSItemProvider], append: Bool) -> Bool {
         let candidates = providers.filter { $0.canLoadObject(ofClass: URL.self) }
         guard !candidates.isEmpty else { return false }
@@ -94,11 +94,7 @@ struct ContentView: View {
                         continuation.resume(returning: url)
                     }
                 }
-                guard let url else { continue }
-                let isDir =
-                    (try? url.resourceValues(forKeys: [.isDirectoryKey]))?
-                    .isDirectory == true
-                if isDir || url.pathExtension.lowercased() == "pdf" {
+                if let url {
                     urls.append(url)
                 }
             }
@@ -173,13 +169,6 @@ struct ContentView: View {
     // MARK: Review table
 
     private var reviewTable: some View {
-        table
-            .onDrop(of: [.fileURL], isTargeted: nil) { providers in
-                handleDrop(providers, append: true)
-            }
-    }
-
-    private var table: some View {
         Table(model.rows) {
             TableColumn("") { row in
                 Toggle(
@@ -230,6 +219,9 @@ struct ContentView: View {
                 .frame(maxWidth: .infinity, alignment: .trailing)
             }
             .width(90)
+        }
+        .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+            handleDrop(providers, append: true)
         }
     }
 

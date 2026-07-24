@@ -154,12 +154,7 @@ final class ConverterTests: FixtureTestCase {
 
 final class FolderScannerItemsTests: FixtureTestCase {
     private func touch(_ path: String) -> URL {
-        let url = dir.appendingPathComponent(path)
-        try? FileManager.default.createDirectory(
-            at: url.deletingLastPathComponent(), withIntermediateDirectories: true
-        )
-        FileManager.default.createFile(atPath: url.path, contents: Data())
-        return url
+        Fixtures.touch(path, in: dir)
     }
 
     func test_items_mixedFolderAndLooseFile_expandsBoth() {
@@ -222,18 +217,54 @@ final class FolderScannerItemsTests: FixtureTestCase {
         // Assert
         XCTAssertTrue(items.isEmpty)
     }
+
+    func test_items_mergingExistingSource_isDeduped() {
+        // Arrange — batch already contains the file
+        let loose = touch("doc.pdf")
+        let existing = FolderScanner.items(for: [loose])
+
+        // Act — same file dropped again
+        let added = FolderScanner.items(for: [loose], merging: existing)
+
+        // Assert
+        XCTAssertTrue(added.isEmpty)
+    }
+
+    func test_items_mergingNameCollision_getsSuffixNotDropped() {
+        // Arrange — a different file that shares a name with an existing row
+        let first = touch("one/scan.pdf")
+        let second = touch("two/scan.pdf")
+        let existing = FolderScanner.items(for: [first])
+
+        // Act
+        let added = FolderScanner.items(for: [second], merging: existing)
+
+        // Assert
+        XCTAssertEqual(added.map(\.relativePath), ["scan-2.pdf"])
+    }
+
+    func test_items_folderAppendedToBatch_isPrefixed() {
+        // Arrange — a non-empty batch makes any later folder multi-source
+        let loose = touch("loose.pdf")
+        _ = touch("Folder/a.pdf")
+        let existing = FolderScanner.items(for: [loose])
+
+        // Act — single folder, but appended
+        let added = FolderScanner.items(
+            for: [dir.appendingPathComponent("Folder")], merging: existing
+        )
+
+        // Assert
+        XCTAssertEqual(added.map(\.relativePath), ["Folder/a.pdf"])
+    }
 }
 
 final class FolderScannerTests: FixtureTestCase {
     func test_pdfs_findsNestedPDFsWithRelativePathsSorted() throws {
         // Arrange
         let root: URL = dir
-        let fm = FileManager.default
-        try fm.createDirectory(
-            at: root.appendingPathComponent("b/inner"), withIntermediateDirectories: true
-        )
         for path in ["a.pdf", "b/inner/c.pdf", "b/d.PDF", "note.txt", ".hidden.pdf"] {
-            fm.createFile(atPath: root.appendingPathComponent(path).path, contents: Data())
+            Fixtures.touch(path, in: root)
         }
 
         // Act

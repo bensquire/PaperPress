@@ -127,7 +127,7 @@ final class AppModel: ObservableObject {
         switch sourceURLs.count {
         case 0: ""
         case 1: sourceURLs[0].path
-        case let n: "\(n) dropped items"
+        case let n: "\(n) sources"
         }
     }
 
@@ -155,28 +155,25 @@ final class AppModel: ObservableObject {
             sourceURLs = urls
             rows = []
         }
-        let existingSources = Set(rows.map { $0.item.url.standardizedFileURL.path })
-        let existingPaths = Set(rows.map(\.id))
+        let existing = rows.map(\.item)
+        let base = rows.count
         phase = .analysing(done: 0, of: 0)
         worker = Task.detached(priority: .userInitiated) { [self] in
-            let items = FolderScanner.items(for: urls).filter {
-                !existingSources.contains($0.url.standardizedFileURL.path)
-                    && !existingPaths.contains($0.relativePath)
-            }
+            let items = FolderScanner.items(for: urls, merging: existing)
             guard !items.isEmpty else {
                 await MainActor.run {
-                    self.phase = append ? .review : .idle
-                    if !append {
+                    if append {
+                        self.phase = .review
+                    } else {
+                        self.phase = .idle
                         self.errorText = "No PDFs found"
                     }
                 }
                 return
             }
-            let base = await MainActor.run { () -> Int in
-                let base = self.rows.count
+            await MainActor.run {
                 self.rows += items.map { FileRow(item: $0) }
                 self.phase = .analysing(done: 0, of: items.count)
-                return base
             }
             for (i, item) in items.enumerated() {
                 if Task.isCancelled { return }

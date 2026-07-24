@@ -42,9 +42,7 @@ public enum Converter {
         settings: Settings = Settings()
     ) throws -> FileResult {
         guard outURL.standardizedFileURL != report.url.standardizedFileURL else {
-            throw PressError.scanFailed(
-                "Writing \(outURL.lastPathComponent) here would overwrite the original"
-            )
+            throw PressError.wouldOverwrite(outURL.lastPathComponent)
         }
         if case .passThrough = report.verdict {
             return try passThrough(report, to: outURL, kinds: [])

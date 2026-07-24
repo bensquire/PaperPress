@@ -2,10 +2,13 @@ import Foundation
 
 public enum PressError: LocalizedError {
     case scanFailed(String)
+    case wouldOverwrite(String)
 
     public var errorDescription: String? {
         switch self {
         case let .scanFailed(s): "Processing failed: \(s)"
+        case let .wouldOverwrite(name):
+            "Writing \(name) here would overwrite the original"
         }
     }
 }

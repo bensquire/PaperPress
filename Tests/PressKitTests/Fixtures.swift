@@ -134,4 +134,16 @@ enum Fixtures {
         try! data.write(to: url)
         return url
     }
+
+    /// Create an empty placeholder file (with intermediate directories) —
+    /// enough for FolderScanner tests, which never open the files.
+    @discardableResult
+    static func touch(_ path: String, in dir: URL) -> URL {
+        let url = dir.appendingPathComponent(path)
+        try? FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        FileManager.default.createFile(atPath: url.path, contents: Data())
+        return url
+    }
 }

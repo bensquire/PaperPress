@@ -10,20 +10,30 @@ public enum FolderScanner {
         public var id: String { relativePath }
     }
 
-    /// Expands a dropped/chosen mix of PDF files and folders into items.
-    /// Folders scan recursively; with more than one source, each folder's
-    /// items are prefixed with the folder name so two sources can't
-    /// collide. Duplicate source files are dropped (first wins); duplicate
-    /// output names get a numbered suffix.
-    public static func items(for urls: [URL]) -> [Item] {
+    /// Expands a dropped/chosen mix of PDF files and folders into the items
+    /// they add to a batch. Folders scan recursively; loose PDFs land flat
+    /// under their file name; anything else is ignored — this is the single
+    /// owner of "what counts as a source".
+    ///
+    /// The batch invariant — every distinct source file appears once, under
+    /// a unique output path — holds across calls: pass the batch's current
+    /// items as `existing` and only new, uniquely-named additions come
+    /// back. Folder items are name-prefixed whenever the batch has more
+    /// than one source (several URLs, or anything already present), so the
+    /// same folder can't collide with other sources; duplicate names get a
+    /// numbered suffix.
+    public static func items(
+        for urls: [URL], merging existing: [Item] = []
+    ) -> [Item] {
+        let multiSource = urls.count > 1 || !existing.isEmpty
         var expanded: [Item] = []
         for url in urls {
             let isDir =
                 (try? url.resourceValues(forKeys: [.isDirectoryKey]))?
                 .isDirectory == true
             if isDir {
-                let prefix = urls.count > 1 ? url.lastPathComponent + "/" : ""
-                expanded += pdfs(under: url).map {
+                let prefix = multiSource ? url.lastPathComponent + "/" : ""
+                expanded += scanFolder(url).map {
                     Item(url: $0.url, relativePath: prefix + $0.relativePath)
                 }
             } else if url.pathExtension.lowercased() == "pdf" {
@@ -31,16 +41,16 @@ public enum FolderScanner {
             }
         }
 
-        var seenSources = Set<String>()
-        var seenPaths = Set<String>()
+        var seenSources = Set(existing.map { $0.url.standardizedFileURL.path })
+        var seenPaths = Set(existing.map(\.relativePath))
         var items: [Item] = []
         for item in expanded {
             guard seenSources.insert(item.url.standardizedFileURL.path).inserted
             else { continue }
             var path = item.relativePath
+            let base = (item.relativePath as NSString).deletingPathExtension
             var n = 2
             while !seenPaths.insert(path).inserted {
-                let base = (item.relativePath as NSString).deletingPathExtension
                 path = "\(base)-\(n).pdf"
                 n += 1
             }
@@ -52,6 +62,12 @@ public enum FolderScanner {
     }
 
     public static func pdfs(under root: URL) -> [Item] {
+        scanFolder(root).sorted {
+            $0.relativePath.localizedStandardCompare($1.relativePath) == .orderedAscending
+        }
+    }
+
+    private static func scanFolder(_ root: URL) -> [Item] {
         let fm = FileManager.default
         guard
             let walker = fm.enumerator(
@@ -75,8 +91,6 @@ public enum FolderScanner {
                 : url.lastPathComponent
             items.append(Item(url: url, relativePath: rel))
         }
-        return items.sorted {
-            $0.relativePath.localizedStandardCompare($1.relativePath) == .orderedAscending
-        }
+        return items
     }
 }
