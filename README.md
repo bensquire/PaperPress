@@ -19,7 +19,7 @@ black & white — without touching a single original.**
 
 <br/>
 
-<img src="images/screenshot.png" alt="PaperPress — review table showing every PDF's verdict and estimated size before converting" width="900"/>
+<img src="images/hero-filelist.png" alt="PaperPress — review table showing every PDF's verdict and estimated size before converting" width="900"/>
 
 </div>
 
@@ -28,7 +28,7 @@ recursively — and shows you exactly what it would do before it does
 anything. Tick what you want, hit Convert, and a mirrored copy of the
 folder appears with fat scans re-compressed to crisp 1-bit CCITT G4
 (~20 KB per page) and everything else passed through byte-identical.
-A 5.7 MB scan becomes 269 KB; your originals are never modified.
+A 5.7 MB scan becomes ~300 KB; your originals are never modified.
 
 PaperPress is the batch companion to
 [PaperDrop](https://github.com/bensquire/PaperDrop), which makes these
@@ -49,14 +49,21 @@ compact PDFs at scan time.
 - **Photos survive** — pages that are actually photographic (histogram
   and local-contrast analysis, not guesswork) are kept as grayscale
   JPEG instead of being dithered to mush. One document can mix both.
-- **Legibility beats compression** — after binarising, the result is
-  compared against the grayscale it came from; pages whose print is too
-  small for their scan resolution to survive 1-bit (measured damage,
-  not a dpi rule) stay grayscale instead — 4-bit Flate by default
-  (crisper *and* smaller than JPEG on document content), or JPEG via
-  Settings.
+- **Legibility beats compression** — sources scanned below 150 dpi
+  never get binarised (small print can't survive it), and above that a
+  worst-region damage check compares the 1-bit result against the
+  grayscale it came from: if any region of the page degrades, the whole
+  page stays grayscale — 4-bit Flate by default (crisper *and* smaller
+  than JPEG on document content), or JPEG via Settings.
 - **Searchable** — a fresh invisible text layer via Apple's Vision OCR
   on every converted page. No cloud, no external tools.
+- **See it before and after** — analyse is instant and read-only;
+  convert shows a live count and finishes with the space saved:
+
+  <p align="center">
+  <img src="images/hero-ready.png" alt="Drop screen" width="46%"/>
+  <img src="images/hero-complete.png" alt="Done screen with space saved" width="46%"/>
+  </p>
 - **Scan edges cleaned** — the black bands a scanner lid or skewed
   feed leaves along page edges are whitened (only when they hug the
   border — content that reaches the edge is kept; toggleable).
@@ -104,10 +111,13 @@ Sources/PressKit/      # engine: inspection, classification, compression
   PDFInspector.swift   #   verdicts: scan / born-digital / already-1-bit
   PDFRender.swift      #   page rasteriser (native-dpi, rotation-aware)
   PageClassifier.swift #   text vs photo (paper-peak + smooth-midtone)
-  Binarize.swift       #   Sauvola adaptive threshold (faded-print safe)
-  Converter.swift      #   per-page G4/JPEG rebuild, min-saving guard
+  Binarize.swift       #   Sauvola adaptive threshold + worst-region
+                       #   damage metric (the G4-or-grayscale decision)
+  EdgeClean.swift      #   scan-edge band removal (content-safe)
+  Gray4.swift          #   4-bit grayscale Flate encoder (PNG predictor)
+  Converter.swift      #   per-page G4/4-bit/JPEG ladder, min-saving guard
   Pipeline.swift       #   Otsu, cleanup, 1-bit packing (from PaperDrop)
-  PDFWriter.swift      #   hand-rolled PDF: CCITT G4 + DCT + OCR layer
+  PDFWriter.swift      #   hand-rolled PDF: G4 + DCT + Flate + OCR layer
   G4.swift, OCR.swift  #   G4 stream extraction, Vision OCR
 Sources/PaperPress/    # SwiftUI app: analyse → review → convert
 Tests/PressKitTests/   # unit tests with programmatic PDF fixtures
@@ -118,21 +128,26 @@ scripts/               # DMG packaging
 ## How a 5 MB scan becomes 20 KB per page
 
 1. The page's embedded scan image is found and its true resolution
-   measured; the page is re-rendered at 300 dpi — low-res sources are
-   interpolated up first, because their grayscale antialiasing carries
-   sub-pixel detail that thresholding at native resolution would
-   destroy.
+   measured; black scan-edge bands are whitened (content that reaches
+   the edge is kept).
 2. A histogram + spatial pass decides: document or photo?
-3. Documents: locally adaptive threshold (Sauvola) → 1-bit, speckles
-   removed, packed and G4-compressed — the same encoding fax machines
-   used, unbeatable for black-and-white text, and faint print survives
-   because each pixel is judged against its neighbourhood, not one
-   global cut.
-4. Photos: grayscale JPEG at 150 dpi — continuous tone carries no
+3. Documents scanned at 150 dpi or better are re-rendered at 300 dpi
+   (low-res antialiasing becomes smooth 1-bit edges), binarised with a
+   locally adaptive threshold (Sauvola — faint print survives because
+   each pixel is judged against its neighbourhood, not one global cut),
+   despeckled, and G4-compressed — the encoding fax machines used,
+   unbeatable for black-and-white text.
+4. The 1-bit result is then compared region-by-region against the
+   grayscale it came from; if the worst region measurably degraded
+   (merged strokes, filled counters), or the source was below 150 dpi
+   to begin with, the page ships as 4-bit grayscale Flate instead —
+   legibility beats compression.
+5. Photos: grayscale JPEG at 150 dpi — continuous tone carries no
    useful detail beyond that.
-5. Vision OCR runs on the cleaned page and an invisible text layer is
-   embedded, so Spotlight and Preview can search the result.
-6. If the rebuilt PDF isn't meaningfully smaller, the original is
+6. Vision OCR reads a 150 dpi grayscale of the page (measured as
+   accurate as higher resolutions, much faster) and an invisible text
+   layer is embedded, so Spotlight and Preview can search the result.
+7. If the rebuilt PDF isn't meaningfully smaller, the original is
    copied through unchanged — the tool never makes a file worse.
 
 ## Releasing
