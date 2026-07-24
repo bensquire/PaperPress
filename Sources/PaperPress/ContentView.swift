@@ -43,9 +43,9 @@ struct ContentView: View {
                 reviewTable
                 Divider()
                 convertBar
-            case let .converting(done, of, current):
+            case let .converting(done, of):
                 progressState(
-                    title: "Converting…", detail: current, done: done, of: of
+                    title: "Converting…", detail: "\(done) of \(of)", done: done, of: of
                 )
             case .done:
                 doneState
@@ -55,19 +55,38 @@ struct ContentView: View {
         .frame(minWidth: 640, minHeight: 460)
     }
 
+    // MARK: Centred states
+
+    /// Shared skeleton for the drop / progress / done states: centred
+    /// header + title + detail, sitting slightly above centre.
+    private func centeredState<Header: View, Detail: View>(
+        title: String,
+        @ViewBuilder header: () -> Header,
+        @ViewBuilder detail: () -> Detail
+    ) -> some View {
+        VStack(spacing: 18) {
+            Spacer()
+            header()
+            Text(title)
+                .font(.title3)
+                .foregroundStyle(.secondary)
+            detail()
+            Spacer()
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
     // MARK: Idle / drop state
 
     @State private var dropHovering = false
 
     private var dropState: some View {
-        VStack(spacing: 18) {
-            Spacer()
+        centeredState(title: "Drop a folder of scanned PDFs") {
             Image(systemName: "folder.badge.gearshape")
                 .font(.system(size: 64, weight: .thin))
                 .foregroundStyle(.tertiary)
-            Text("Drop a folder of scanned PDFs")
-                .font(.title3)
-                .foregroundStyle(.secondary)
+        } detail: {
             Text("Every PDF inside is analysed — nothing is changed until you convert")
                 .font(.callout)
                 .foregroundStyle(.tertiary)
@@ -82,10 +101,7 @@ struct ContentView: View {
             .controlSize(.large)
             .hoverHighlight()
             .keyboardShortcut(.defaultAction)
-            Spacer()
-            Spacer()
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(
             RoundedRectangle(cornerRadius: 12)
                 .strokeBorder(
@@ -115,17 +131,14 @@ struct ContentView: View {
     private func progressState(
         title: String, detail: String, done: Int, of: Int
     ) -> some View {
-        VStack(spacing: 18) {
-            Spacer()
+        centeredState(title: title) {
             if of > 0 {
                 ProgressView(value: Double(done), total: Double(of))
                     .frame(maxWidth: 320)
             } else {
                 ProgressView()
             }
-            Text(title)
-                .font(.title3)
-                .foregroundStyle(.secondary)
+        } detail: {
             Text(detail)
                 .font(.callout)
                 .foregroundStyle(.tertiary)
@@ -134,9 +147,7 @@ struct ContentView: View {
                 .frame(maxWidth: 420)
             Button("Cancel", role: .cancel) { model.cancel() }
                 .hoverHighlight()
-            Spacer()
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // MARK: Review table
@@ -213,22 +224,7 @@ struct ContentView: View {
                 row.error != nil
                     ? .red : row.isConvert ? Color.accentColor : Color.secondary
             )
-            .help(row.error ?? verdictHelp(row))
-    }
-
-    private func verdictHelp(_ row: FileRow) -> String {
-        switch row.report?.verdict {
-        case .convert:
-            "Scanned pages that will be re-compressed to compact 1-bit"
-        case .passThrough(.bornDigital):
-            "Real text/vector PDF — rasterising it would only make it worse"
-        case .passThrough(.alreadyOneBit):
-            "Scan is already 1-bit compressed"
-        case .passThrough(.alreadySmall):
-            "Already compact for its page count"
-        case nil:
-            ""
-        }
+            .help(row.verdictHelp)
     }
 
     // MARK: Convert bar
@@ -259,7 +255,7 @@ struct ContentView: View {
             }
             .buttonStyle(.borderedProminent)
             .hoverHighlight()
-            .disabled(convertCount == 0)
+            .disabled(!model.canConvert)
             .keyboardShortcut(.defaultAction)
             Button("Discard", role: .destructive) { model.reset() }
                 .hoverHighlight()
@@ -270,14 +266,11 @@ struct ContentView: View {
     // MARK: Done state
 
     private var doneState: some View {
-        VStack(spacing: 18) {
-            Spacer()
+        centeredState(title: "Done") {
             Image(systemName: "checkmark.circle")
                 .font(.system(size: 64, weight: .thin))
                 .foregroundStyle(.green)
-            Text("Done")
-                .font(.title3)
-                .foregroundStyle(.secondary)
+        } detail: {
             let saved = model.totalInputBytes - model.totalOutputBytes
             Text(
                 "\(model.convertedCount) converted · "
@@ -298,10 +291,7 @@ struct ContentView: View {
                 Button("Convert Another Folder") { model.reset() }
                     .hoverHighlight()
             }
-            Spacer()
-            Spacer()
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // MARK: Status bar
@@ -339,9 +329,7 @@ struct ContentView: View {
         switch model.phase {
         case .idle:
             return "Originals are never modified"
-        case .analysing:
-            return model.sourceURL?.path ?? ""
-        case .review:
+        case .analysing, .review:
             return model.sourceURL?.path ?? ""
         case .converting:
             return "Writing to \(model.outputURL?.path ?? "")"

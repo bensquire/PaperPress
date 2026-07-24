@@ -2,19 +2,7 @@ import XCTest
 
 @testable import PressKit
 
-final class PDFInspectorTests: XCTestCase {
-    var dir: URL!
-
-    override func setUp() {
-        super.setUp()
-        dir = Fixtures.tempDir()
-    }
-
-    override func tearDown() {
-        try? FileManager.default.removeItem(at: dir)
-        super.tearDown()
-    }
-
+final class PDFInspectorTests: FixtureTestCase {
     func test_inspect_bornDigitalPDF_passesThrough() throws {
         // Arrange
         let url = Fixtures.write(Fixtures.bornDigitalPDF(), to: dir, name: "digital.pdf")

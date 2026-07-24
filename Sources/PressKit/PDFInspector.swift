@@ -1,6 +1,5 @@
 import CoreGraphics
 import Foundation
-import PDFKit
 
 /// Analyses an existing PDF to decide whether PaperPress can usefully
 /// re-compress it: which pages are full-page scans (and at what native
@@ -31,14 +30,6 @@ public enum PDFInspector {
         case bornDigital
         case alreadyOneBit
         case alreadySmall
-
-        public var label: String {
-            switch self {
-            case .bornDigital: "Born digital"
-            case .alreadyOneBit: "Already 1-bit"
-            case .alreadySmall: "Already small"
-            }
-        }
     }
 
     public struct Report {
@@ -50,35 +41,34 @@ public enum PDFInspector {
         public let estimatedBytes: Int
     }
 
-    /// Bytes-per-page below which a file is considered not worth converting.
+    /// Bytes per scan page below which a file is considered not worth
+    /// converting.
     public static let smallEnoughBytesPerPage = 45_000
-    /// Heuristic per-page output estimate for the analysis view.
-    static let estimatedBytesPerPage = 22_000
+    /// Expected G4 output density at scan resolution — measured ~20 KB for
+    /// a text A4 at 300 dpi (8.7 Mpx). Drives the review-table estimate.
+    static let estimatedBytesPerPixel = 0.0023
 
     public static func inspect(_ url: URL) throws -> Report {
         guard let doc = CGPDFDocument(url as CFURL), doc.numberOfPages > 0 else {
-            throw ScanError.scanFailed("Cannot open PDF \(url.lastPathComponent)")
+            throw PressError.scanFailed("Cannot open PDF \(url.lastPathComponent)")
         }
         guard doc.isUnlocked else {
-            throw ScanError.scanFailed("\(url.lastPathComponent) is password-protected")
+            throw PressError.scanFailed("\(url.lastPathComponent) is password-protected")
         }
         let fileBytes =
             (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int)
             .flatMap { $0 } ?? 0
-        let textDoc = PDFDocument(url: url)
 
+        // One PageInfo per document page, unconditionally — Converter relies
+        // on positional alignment with page numbers.
         var pages: [PageInfo] = []
         for i in 1...doc.numberOfPages {
-            guard let page = doc.page(at: i) else { continue }
-            var box = page.getBoxRect(.mediaBox)
-            if page.rotationAngle % 180 != 0 {
-                box = CGRect(x: 0, y: 0, width: box.height, height: box.width)
+            guard let page = doc.page(at: i) else {
+                pages.append(PageInfo(kind: .bornDigital, widthPt: 595, heightPt: 842))
+                continue
             }
-            let kind = classify(
-                page: page, widthPt: box.width, heightPt: box.height,
-                textChars: textDoc?.page(at: i - 1)?.string?
-                    .trimmingCharacters(in: .whitespacesAndNewlines).count ?? 0
-            )
+            let box = page.orientedMediaBoxSize
+            let kind = classify(page: page, widthPt: box.width, heightPt: box.height)
             pages.append(PageInfo(kind: kind, widthPt: box.width, heightPt: box.height))
         }
 
@@ -94,14 +84,14 @@ public enum PDFInspector {
             return false
         }) {
             verdict = .passThrough(.alreadyOneBit)
-        } else if !pages.isEmpty, fileBytes / pages.count < smallEnoughBytesPerPage {
+        } else if fileBytes / scans.count < smallEnoughBytesPerPage {
             verdict = .passThrough(.alreadySmall)
         } else {
             verdict = .convert
         }
         let estimated =
             verdict == .convert
-            ? pages.count * estimatedBytesPerPage
+            ? pages.map(estimatedPageBytes).reduce(0, +)
             : fileBytes
         return Report(
             url: url, fileBytes: fileBytes, pages: pages,
@@ -109,10 +99,23 @@ public enum PDFInspector {
         )
     }
 
+    /// Expected output size of one converted page: pixel count at the
+    /// (capped) processing resolution × measured G4 density.
+    static func estimatedPageBytes(_ page: PageInfo) -> Int {
+        let dpi: Int =
+            if case let .scan(native, _) = page.kind {
+                min(native, 300)
+            } else {
+                300
+            }
+        let px = page.widthPt / 72 * Double(dpi) * (page.heightPt / 72 * Double(dpi))
+        return max(8_000, Int(px * estimatedBytesPerPixel))
+    }
+
     // MARK: Page classification
 
     private static func classify(
-        page: CGPDFPage, widthPt: Double, heightPt: Double, textChars: Int
+        page: CGPDFPage, widthPt: Double, heightPt: Double
     ) -> PageKind {
         guard let dict = page.dictionary,
             let img = largestImage(inPageDict: dict)

@@ -24,10 +24,7 @@ public enum PageClassifier {
     static let smoothMidtoneThreshold = 0.08
 
     public static func classify(_ g: Pipeline.GrayImage) -> Kind {
-        var hist = [Double](repeating: 0, count: 256)
-        for p in g.pixels {
-            hist[Int(p)] += 1
-        }
+        let hist = Pipeline.histogram(g)
         let total = Double(g.pixels.count)
         guard total > 0 else { return .text }
 

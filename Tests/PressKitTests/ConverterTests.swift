@@ -2,19 +2,7 @@ import XCTest
 
 @testable import PressKit
 
-final class ConverterTests: XCTestCase {
-    var dir: URL!
-
-    override func setUp() {
-        super.setUp()
-        dir = Fixtures.tempDir()
-    }
-
-    override func tearDown() {
-        try? FileManager.default.removeItem(at: dir)
-        super.tearDown()
-    }
-
+final class ConverterTests: FixtureTestCase {
     private var noOCR: Converter.Settings {
         var s = Converter.Settings()
         s.ocr = false
@@ -150,11 +138,10 @@ final class ConverterTests: XCTestCase {
     }
 }
 
-final class FolderScannerTests: XCTestCase {
+final class FolderScannerTests: FixtureTestCase {
     func test_pdfs_findsNestedPDFsWithRelativePathsSorted() throws {
         // Arrange
-        let root = Fixtures.tempDir()
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root: URL = dir
         let fm = FileManager.default
         try fm.createDirectory(
             at: root.appendingPathComponent("b/inner"), withIntermediateDirectories: true

@@ -1,13 +1,22 @@
 import CoreGraphics
 import Foundation
 
+extension CGPDFPage {
+    /// MediaBox size with the page's rotation applied — the size the page
+    /// actually displays at. Inspector dpi maths and render dimensions must
+    /// agree, so both go through this.
+    public var orientedMediaBoxSize: CGSize {
+        let box = getBoxRect(.mediaBox)
+        return rotationAngle % 180 == 0
+            ? CGSize(width: box.width, height: box.height)
+            : CGSize(width: box.height, height: box.width)
+    }
+}
+
 /// Rasterises a PDF page to 8-bit grayscale for the compression pipeline.
 public enum PDFRender {
     public static func gray(page: CGPDFPage, dpi: Int) throws -> Pipeline.GrayImage {
-        var box = page.getBoxRect(.mediaBox)
-        if page.rotationAngle % 180 != 0 {
-            box = CGRect(x: 0, y: 0, width: box.height, height: box.width)
-        }
+        let box = page.orientedMediaBoxSize
         let scale = Double(dpi) / 72
         let w = max(1, Int((box.width * scale).rounded()))
         let h = max(1, Int((box.height * scale).rounded()))
@@ -21,7 +30,7 @@ public enum PDFRender {
                     bitmapInfo: CGImageAlphaInfo.none.rawValue
                 )
             else {
-                throw ScanError.scanFailed("Cannot create render context")
+                throw PressError.scanFailed("Cannot create render context")
             }
             ctx.setFillColor(gray: 1, alpha: 1)
             ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))

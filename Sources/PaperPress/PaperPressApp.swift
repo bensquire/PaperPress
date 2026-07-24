@@ -2,7 +2,20 @@ import SwiftUI
 
 @main
 struct PaperPressApp: App {
-    @StateObject private var model = AppModel()
+    // Dev/testing convenience: `PAPERPRESS_FOLDER=/path PaperPress` skips
+    // straight to analysing that folder. (An ordinary CLI argument won't
+    // do — AppKit treats it as a document to open and then never creates
+    // the window.) Read here at the composition root so AppModel itself
+    // stays environment-free.
+    @StateObject private var model = AppModel(
+        initialFolder: ProcessInfo.processInfo.environment["PAPERPRESS_FOLDER"]
+            .flatMap { path in
+                var isDir: ObjCBool = false
+                let exists = FileManager.default.fileExists(
+                    atPath: path, isDirectory: &isDir)
+                return exists && isDir.boolValue ? URL(fileURLWithPath: path) : nil
+            }
+    )
 
     var body: some Scene {
         WindowGroup("PaperPress") {
@@ -16,7 +29,7 @@ struct PaperPressApp: App {
                     .disabled(model.busy)
                 Button("Convert…") { model.chooseOutputAndConvert() }
                     .keyboardShortcut(.return, modifiers: .command)
-                    .disabled(model.phase != .review || model.includedRows.isEmpty)
+                    .disabled(!model.canConvert)
             }
         }
 

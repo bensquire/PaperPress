@@ -36,11 +36,17 @@ public enum Pipeline {
 
     // MARK: Otsu
 
-    public static func otsuThreshold(_ g: GrayImage) -> UInt8 {
+    /// 256-bin grayscale histogram — shared by Otsu and the page classifier.
+    public static func histogram(_ g: GrayImage) -> [Double] {
         var hist = [Double](repeating: 0, count: 256)
         for p in g.pixels {
             hist[Int(p)] += 1
         }
+        return hist
+    }
+
+    public static func otsuThreshold(_ g: GrayImage) -> UInt8 {
+        let hist = histogram(g)
         let total = Double(g.pixels.count)
         let sumAll = (0..<256).reduce(0.0) { $0 + Double($1) * hist[$1] }
         var bestT = 128, bestVar = -1.0, cum = 0.0, cumSum = 0.0

@@ -1,9 +1,6 @@
 import Foundation
 
-/// Name-compatible with ScanKit's ScanError so the pipeline files copied
-/// from PaperDrop (Pipeline, G4, OCR, ImageHelpers, PDFWriter) diff cleanly
-/// against their originals.
-public enum ScanError: LocalizedError {
+public enum PressError: LocalizedError {
     case scanFailed(String)
 
     public var errorDescription: String? {
@@ -12,3 +9,8 @@ public enum ScanError: LocalizedError {
         }
     }
 }
+
+/// Compatibility name so the pipeline files copied from PaperDrop's ScanKit
+/// (Pipeline, G4, OCR, ImageHelpers, PDFWriter) diff cleanly against their
+/// originals. New code uses PressError.
+public typealias ScanError = PressError

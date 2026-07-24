@@ -17,8 +17,26 @@ struct FileRow: Identifiable {
         if error != nil { return "Unreadable" }
         switch report?.verdict {
         case .convert: return "Re-compress"
-        case let .passThrough(reason): return reason.label
+        case .passThrough(.bornDigital): return "Born digital"
+        case .passThrough(.alreadyOneBit): return "Already 1-bit"
+        case .passThrough(.alreadySmall): return "Already small"
         case nil: return "…"
+        }
+    }
+
+    var verdictHelp: String {
+        if let error { return error }
+        switch report?.verdict {
+        case .convert:
+            return "Scanned pages that will be re-compressed to compact 1-bit"
+        case .passThrough(.bornDigital):
+            return "Real text/vector PDF — rasterising it would only make it worse"
+        case .passThrough(.alreadyOneBit):
+            return "Scan is already 1-bit compressed"
+        case .passThrough(.alreadySmall):
+            return "Already compact for its page count"
+        case nil:
+            return ""
         }
     }
 
@@ -33,7 +51,7 @@ final class AppModel: ObservableObject {
         case idle
         case analysing(done: Int, of: Int)
         case review
-        case converting(done: Int, of: Int, current: String)
+        case converting(done: Int, of: Int)
         case done
     }
 
@@ -43,27 +61,20 @@ final class AppModel: ObservableObject {
     @Published var outputURL: URL?
     @Published var errorText: String?
 
-    // Settings (persisted)
-    @AppStorage("dpiCap") var dpiCap = 300
-    @AppStorage("photoDpiCap") var photoDpiCap = 150
-    @AppStorage("ocrEnabled") var ocrEnabled = true
-    @AppStorage("jpegQuality") var jpegQuality = 0.6
-    @AppStorage("minSavingPercent") var minSavingPercent = 20
+    // Settings (persisted; defaults come from the library so the two can't
+    // drift)
+    @AppStorage("dpiCap") var dpiCap = Converter.Settings().dpiCap
+    @AppStorage("photoDpiCap") var photoDpiCap = Converter.Settings().photoDpiCap
+    @AppStorage("ocrEnabled") var ocrEnabled = Converter.Settings().ocr
+    @AppStorage("jpegQuality") var jpegQuality = Converter.Settings().jpegQuality
+    @AppStorage("minSavingPercent") var minSavingPercent =
+        Int(Converter.Settings().minSavingFraction * 100)
 
     private var worker: Task<Void, Never>?
 
-    init() {
-        // Dev/testing convenience: `PAPERPRESS_FOLDER=/path PaperPress`
-        // skips straight to analysing that folder. (An ordinary CLI
-        // argument won't do — AppKit treats it as a document to open and
-        // then never creates the window.)
-        if let path = ProcessInfo.processInfo.environment["PAPERPRESS_FOLDER"] {
-            var isDir: ObjCBool = false
-            if FileManager.default.fileExists(atPath: path, isDirectory: &isDir),
-                isDir.boolValue
-            {
-                analyse(folder: URL(fileURLWithPath: path))
-            }
+    init(initialFolder: URL? = nil) {
+        if let initialFolder {
+            analyse(folder: initialFolder)
         }
     }
 
@@ -72,6 +83,10 @@ final class AppModel: ObservableObject {
         case .analysing, .converting: true
         default: false
         }
+    }
+
+    var canConvert: Bool {
+        phase == .review && !includedRows.isEmpty
     }
 
     var settings: Converter.Settings {
@@ -139,18 +154,19 @@ final class AppModel: ObservableObject {
             }
             for (i, item) in items.enumerated() {
                 if Task.isCancelled { return }
-                var row = FileRow(item: item)
+                var report: PDFInspector.Report?
+                var error: String?
                 do {
-                    row.report = try PDFInspector.inspect(item.url)
-                    row.included = row.report?.verdict == .convert
-                } catch {
-                    row.error = error.localizedDescription
-                    row.included = false
+                    report = try PDFInspector.inspect(item.url)
+                } catch let e {
+                    error = e.localizedDescription
                 }
                 let done = i + 1
-                await MainActor.run { [row] in
+                await MainActor.run { [report, error] in
                     guard !Task.isCancelled else { return }
-                    self.rows[i] = row
+                    self.rows[i].report = report
+                    self.rows[i].error = error
+                    self.rows[i].included = report?.verdict == .convert
                     self.phase = .analysing(done: done, of: items.count)
                 }
             }
@@ -183,29 +199,48 @@ final class AppModel: ObservableObject {
         errorText = nil
         let jobs = rows.enumerated().filter { $0.element.included && $0.element.report != nil }
         let settings = settings
-        phase = .converting(done: 0, of: jobs.count, current: "")
+        phase = .converting(done: 0, of: jobs.count)
         worker = Task.detached(priority: .userInitiated) { [self] in
+            // Files are independent (distinct output paths), so convert a few
+            // concurrently; the cap bounds the page buffers held in flight.
+            let width = min(4, max(1, ProcessInfo.processInfo.activeProcessorCount - 2))
             var failures = 0
-            for (n, (index, row)) in jobs.enumerated() {
-                if Task.isCancelled { return }
-                await MainActor.run {
-                    self.phase = .converting(
-                        done: n, of: jobs.count, current: row.item.relativePath
-                    )
+            var done = 0
+            await withTaskGroup(of: (Int, Result<Converter.FileResult, Error>).self) { group in
+                var next = 0
+                func spawnNext(into group: inout TaskGroup<(Int, Result<Converter.FileResult, Error>)>) {
+                    guard next < jobs.count, !Task.isCancelled else { return }
+                    let (index, row) = jobs[next]
+                    next += 1
+                    let dst = out.appendingPathComponent(row.item.relativePath)
+                    group.addTask {
+                        do {
+                            return (
+                                index,
+                                .success(
+                                    try Converter.convert(
+                                        report: row.report!, to: dst, settings: settings
+                                    ))
+                            )
+                        } catch {
+                            return (index, .failure(error))
+                        }
+                    }
                 }
-                let dst = out.appendingPathComponent(row.item.relativePath)
-                do {
-                    let result = try Converter.convert(
-                        report: row.report!, to: dst, settings: settings
-                    )
-                    await MainActor.run {
-                        self.rows[index].result = result
+                for _ in 0..<width {
+                    spawnNext(into: &group)
+                }
+                for await (index, result) in group {
+                    done += 1
+                    if case .failure = result { failures += 1 }
+                    await MainActor.run { [done] in
+                        switch result {
+                        case let .success(r): self.rows[index].result = r
+                        case let .failure(e): self.rows[index].error = e.localizedDescription
+                        }
+                        self.phase = .converting(done: done, of: jobs.count)
                     }
-                } catch {
-                    failures += 1
-                    await MainActor.run {
-                        self.rows[index].error = error.localizedDescription
-                    }
+                    spawnNext(into: &group)
                 }
             }
             let failed = failures

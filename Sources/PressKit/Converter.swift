@@ -21,6 +21,10 @@ public enum Converter {
         public init() {}
     }
 
+    /// Pages are classified on a cheap render at this resolution, so the
+    /// text/photo decision doesn't shift when the user changes dpi caps.
+    static let probeDpi = 100
+
     public struct FileResult {
         public let inputBytes: Int
         public let outputBytes: Int
@@ -35,98 +39,98 @@ public enum Converter {
     /// The output file keeps the source's modification date.
     public static func convert(
         report: PDFInspector.Report, to outURL: URL,
-        settings: Settings = Settings(),
-        progress: (@Sendable (_ page: Int, _ ofPages: Int) -> Void)? = nil
+        settings: Settings = Settings()
     ) throws -> FileResult {
         if case .passThrough = report.verdict {
-            try copyThrough(report.url, to: outURL)
-            return FileResult(
-                inputBytes: report.fileBytes, outputBytes: report.fileBytes,
-                converted: false, pageKinds: []
-            )
+            return try passThrough(report, to: outURL, kinds: [])
         }
 
         guard let doc = CGPDFDocument(report.url as CFURL) else {
-            throw ScanError.scanFailed("Cannot open PDF \(report.url.lastPathComponent)")
+            throw PressError.scanFailed("Cannot open PDF \(report.url.lastPathComponent)")
         }
         var pages: [PDFWriter.Page] = []
         var kinds: [PageClassifier.Kind] = []
         for i in 1...doc.numberOfPages {
-            progress?(i, doc.numberOfPages)
             guard let page = doc.page(at: i) else { continue }
-            let info = i - 1 < report.pages.count ? report.pages[i - 1] : nil
             let nativeDpi: Int
-            if case let .scan(dpi, _) = info?.kind {
+            if case let .scan(dpi, _) = report.pages[i - 1].kind {
                 nativeDpi = dpi
             } else {
                 nativeDpi = settings.dpiCap  // born-digital page in a mixed file
             }
-            var dpi = max(72, min(nativeDpi, settings.dpiCap))
-            var gray = try PDFRender.gray(page: page, dpi: dpi)
-            let kind = PageClassifier.classify(gray)
+            let textDpi = max(72, min(nativeDpi, settings.dpiCap))
+
+            let probe = try PDFRender.gray(page: page, dpi: min(probeDpi, textDpi))
+            let kind = PageClassifier.classify(probe)
             kinds.append(kind)
-            if kind == .photo, dpi > settings.photoDpiCap {
-                dpi = max(72, settings.photoDpiCap)
-                gray = try PDFRender.gray(page: page, dpi: dpi)
-            }
-            let sizePt = (
-                w: Double(gray.width) / Double(dpi) * 72,
-                h: Double(gray.height) / Double(dpi) * 72
-            )
+            let dpi =
+                kind == .photo
+                ? max(72, min(nativeDpi, settings.photoDpiCap))
+                : textDpi
+            let gray =
+                dpi == min(probeDpi, textDpi)
+                ? probe
+                : try PDFRender.gray(page: page, dpi: dpi)
+
+            let content: PDFWriter.Content
+            let ocrImage: CGImage?
             switch kind {
             case .text:
-                var bw = Pipeline.threshold(gray, at: Pipeline.otsuThreshold(gray))
-                // The page is already cropped to the paper — despeckle only;
-                // removing border-touching components could eat real content.
-                Pipeline.cleanComponents(&bw, removeBorder: false)
-                let packed = Pipeline.pack(
-                    bw, crop: Pipeline.Crop(x0: 0, y0: 0, x1: bw.width, y1: bw.height),
-                    dpi: dpi
-                )
-                let stream = try G4.extractStream(fromTIFF: G4.tiff(from: packed))
-                let words = settings.ocr ? try OCR.recognize(packed) : []
-                pages.append(
-                    PDFWriter.Page(
-                        content: .g4(stream), dpi: dpi, ocrWords: words,
-                        pageSizePt: sizePt
-                    )
-                )
+                let (stream, packed) = try encodeG4(gray, dpi: dpi)
+                content = .g4(stream)
+                ocrImage = packed.cgImage
             case .photo:
                 guard
                     let jpeg = gray.jpegData(quality: settings.jpegQuality, dpi: dpi)
                 else {
-                    throw ScanError.scanFailed("JPEG encode failed")
+                    throw PressError.scanFailed("JPEG encode failed")
                 }
-                let words: [OCR.Word] =
-                    if settings.ocr, let img = gray.cgImage {
-                        try OCR.recognize(cgImage: img)
-                    } else {
-                        []
-                    }
-                pages.append(
-                    PDFWriter.Page(
-                        content: .jpegGray(jpeg, width: gray.width, height: gray.height),
-                        dpi: dpi, ocrWords: words, pageSizePt: sizePt
-                    )
-                )
+                content = .jpegGray(jpeg, width: gray.width, height: gray.height)
+                ocrImage = gray.cgImage
             }
+            var words: [OCR.Word] = []
+            if settings.ocr, let img = ocrImage {
+                words = try OCR.recognize(cgImage: img)
+            }
+            pages.append(PDFWriter.Page(content: content, dpi: dpi, ocrWords: words))
         }
 
         let data = PDFWriter.build(pages: pages)
         let goodEnough =
             Double(data.count) <= Double(report.fileBytes) * (1 - settings.minSavingFraction)
-        if goodEnough {
-            try FileManager.default.createDirectory(
-                at: outURL.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
-            try data.write(to: outURL, options: .atomic)
-            copySourceDates(from: report.url, to: outURL)
-            return FileResult(
-                inputBytes: report.fileBytes, outputBytes: data.count,
-                converted: true, pageKinds: kinds
-            )
+        guard goodEnough else {
+            return try passThrough(report, to: outURL, kinds: kinds)
         }
+        try ensureParent(of: outURL)
+        try data.write(to: outURL, options: .atomic)
+        copySourceDates(from: report.url, to: outURL)
+        return FileResult(
+            inputBytes: report.fileBytes, outputBytes: data.count,
+            converted: true, pageKinds: kinds
+        )
+    }
+
+    /// Threshold + despeckle + pack a grayscale page and extract its CCITT
+    /// G4 stream — the exact encoding a converted text page gets (also used
+    /// by test fixtures so "already 1-bit" inputs match real output).
+    public static func encodeG4(_ gray: Pipeline.GrayImage, dpi: Int) throws
+        -> (stream: G4.Stream, page: Pipeline.ProcessedPage)
+    {
+        var bw = Pipeline.threshold(gray, at: Pipeline.otsuThreshold(gray))
+        // The page is already cropped to the paper — despeckle only;
+        // removing border-touching components could eat real content.
+        Pipeline.cleanComponents(&bw, removeBorder: false)
+        let packed = Pipeline.pack(
+            bw, crop: Pipeline.Crop(x0: 0, y0: 0, x1: bw.width, y1: bw.height),
+            dpi: dpi
+        )
+        return (try G4.extractStream(fromTIFF: G4.tiff(from: packed)), packed)
+    }
+
+    private static func passThrough(
+        _ report: PDFInspector.Report, to outURL: URL,
+        kinds: [PageClassifier.Kind]
+    ) throws -> FileResult {
         try copyThrough(report.url, to: outURL)
         return FileResult(
             inputBytes: report.fileBytes, outputBytes: report.fileBytes,
@@ -136,13 +140,17 @@ public enum Converter {
 
     static func copyThrough(_ src: URL, to dst: URL) throws {
         let fm = FileManager.default
-        try fm.createDirectory(
-            at: dst.deletingLastPathComponent(), withIntermediateDirectories: true
-        )
+        try ensureParent(of: dst)
         if fm.fileExists(atPath: dst.path) {
             try fm.removeItem(at: dst)
         }
         try fm.copyItem(at: src, to: dst)
+    }
+
+    static func ensureParent(of url: URL) throws {
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
     }
 
     static func copySourceDates(from src: URL, to dst: URL) {

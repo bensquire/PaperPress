@@ -1,5 +1,6 @@
 import CoreGraphics
 import Foundation
+import XCTest
 
 @testable import PressKit
 
@@ -12,6 +13,21 @@ struct SeededRandom {
     mutating func next() -> UInt8 {
         state = state &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
         return UInt8(truncatingIfNeeded: state >> 33)
+    }
+}
+
+/// Base class giving every suite the same fresh-temp-dir lifecycle.
+class FixtureTestCase: XCTestCase {
+    var dir: URL!
+
+    override func setUp() {
+        super.setUp()
+        dir = Fixtures.tempDir()
+    }
+
+    override func tearDown() {
+        try? FileManager.default.removeItem(at: dir)
+        super.tearDown()
     }
 }
 
@@ -81,18 +97,14 @@ enum Fixtures {
         )
     }
 
-    /// A PDF whose pages are already 1-bit CCITT G4.
+    /// A PDF whose pages are already 1-bit CCITT G4 — encoded through the
+    /// same path the product uses, so the fixture can't drift from real
+    /// output.
     static func g4PDF(pages: [Pipeline.GrayImage], dpi: Int) throws -> Data {
         PDFWriter.build(
             pages: try pages.map { g in
-                var bw = Pipeline.threshold(g, at: Pipeline.otsuThreshold(g))
-                Pipeline.cleanComponents(&bw, removeBorder: false)
-                let packed = Pipeline.pack(
-                    bw, crop: Pipeline.Crop(x0: 0, y0: 0, x1: bw.width, y1: bw.height),
-                    dpi: dpi
-                )
-                return PDFWriter.Page(
-                    content: .g4(try G4.extractStream(fromTIFF: G4.tiff(from: packed))),
+                PDFWriter.Page(
+                    content: .g4(try Converter.encodeG4(g, dpi: dpi).stream),
                     dpi: dpi
                 )
             }
