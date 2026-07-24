@@ -52,6 +52,21 @@ final class AppModel: ObservableObject {
 
     private var worker: Task<Void, Never>?
 
+    init() {
+        // Dev/testing convenience: `PAPERPRESS_FOLDER=/path PaperPress`
+        // skips straight to analysing that folder. (An ordinary CLI
+        // argument won't do — AppKit treats it as a document to open and
+        // then never creates the window.)
+        if let path = ProcessInfo.processInfo.environment["PAPERPRESS_FOLDER"] {
+            var isDir: ObjCBool = false
+            if FileManager.default.fileExists(atPath: path, isDirectory: &isDir),
+                isDir.boolValue
+            {
+                analyse(folder: URL(fileURLWithPath: path))
+            }
+        }
+    }
+
     var busy: Bool {
         switch phase {
         case .analysing, .converting: true
