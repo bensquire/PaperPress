@@ -31,6 +31,10 @@ public enum Converter {
         /// ringing); JPEG remains for anyone preferring smooth tones.
         /// Photographic pages always use JPEG.
         public var demotedTextFormat = DemotedTextFormat.gray4
+        /// Whiten black scan-edge bands/shadows (see EdgeClean). Applies
+        /// to text-classified pages only — photographs may legitimately be
+        /// dark at their edges.
+        public var removeScanEdges = true
         public init() {}
     }
 
@@ -88,10 +92,13 @@ public enum Converter {
             var g4: (stream: G4.Stream, page: Pipeline.ProcessedPage)?
             var demotedGray: Pipeline.GrayImage?
             if PageClassifier.classify(probe) == .text {
-                let gray =
+                var gray =
                     textDpi == probeRenderDpi
                     ? probe
                     : try PDFRender.gray(page: page, dpi: textDpi)
+                if settings.removeScanEdges {
+                    EdgeClean.removeScanBorders(&gray, dpi: textDpi)
+                }
                 let bw = Binarize.sauvola(gray, dpi: textDpi)
                 if Binarize.damage(gray, bw) <= settings.maxG4Damage {
                     g4 = try encodeG4(binarized: bw, dpi: textDpi)

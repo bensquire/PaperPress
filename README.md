@@ -57,6 +57,9 @@ compact PDFs at scan time.
   Settings.
 - **Searchable** — a fresh invisible text layer via Apple's Vision OCR
   on every converted page. No cloud, no external tools.
+- **Scan edges cleaned** — the black bands a scanner lid or skewed
+  feed leaves along page edges are whitened (only when they hug the
+  border — content that reaches the edge is kept; toggleable).
 - **Never destructive** — output goes to a separate folder mirroring
   the source tree; pass-through files are copied byte-identical and
   file dates are preserved. If a conversion wouldn't save at least 20%

@@ -55,6 +55,11 @@ struct SettingsView: View {
             }
             .help("Photographic pages carry no extra detail beyond this; lower = smaller")
             Toggle("Add searchable text layer (OCR)", isOn: $model.ocrEnabled)
+            Toggle("Remove black scan edges", isOn: $model.removeScanEdges)
+                .help(
+                    "Whitens the black bands a scanner lid or skewed feed "
+                        + "leaves along page edges (document pages only)"
+                )
             Picker("Photo page JPEG quality", selection: $model.jpegQuality) {
                 Text("Low (smallest)").tag(0.4)
                 Text("Medium").tag(0.6)

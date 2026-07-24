@@ -71,6 +71,8 @@ final class AppModel: ObservableObject {
         Int(Converter.Settings().minSavingFraction * 100)
     @AppStorage("demotedTextFormat") var demotedTextFormat =
         Converter.Settings().demotedTextFormat.rawValue
+    @AppStorage("removeScanEdges") var removeScanEdges =
+        Converter.Settings().removeScanEdges
 
     private var worker: Task<Void, Never>?
 
@@ -100,6 +102,7 @@ final class AppModel: ObservableObject {
         s.minSavingFraction = Double(minSavingPercent) / 100
         s.demotedTextFormat =
             Converter.DemotedTextFormat(rawValue: demotedTextFormat) ?? .gray4
+        s.removeScanEdges = removeScanEdges
         return s
     }
 
