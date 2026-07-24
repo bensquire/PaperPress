@@ -7,11 +7,13 @@ public enum PDFWriter {
     public enum Content {
         case g4(G4.Stream)
         case jpegGray(Data, width: Int, height: Int)
+        case gray4Flate(Gray4.Encoded)
 
         var size: (w: Int, h: Int) {
             switch self {
             case let .g4(s): (s.width, s.height)
             case let .jpegGray(_, w, h): (w, h)
+            case let .gray4Flate(e): (e.width, e.height)
             }
         }
     }
@@ -90,6 +92,16 @@ public enum PDFWriter {
                     """.utf8
                 )
                 img.append(jpeg)
+            case let .gray4Flate(e):
+                img = Data(
+                    """
+                    <</Type/XObject/Subtype/Image/Width \(w)/Height \(h)\
+                    /ColorSpace/DeviceGray/BitsPerComponent 4/Filter/FlateDecode\
+                    /DecodeParms<</Predictor 15/Colors 1/BitsPerComponent 4/Columns \(w)>>\
+                    /Length \(e.data.count)>>\nstream\n
+                    """.utf8
+                )
+                img.append(e.data)
             }
             img.append(Data("\nendstream".utf8))
             objects.append(img)

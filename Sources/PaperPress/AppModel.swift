@@ -69,6 +69,8 @@ final class AppModel: ObservableObject {
     @AppStorage("jpegQuality") var jpegQuality = Converter.Settings().jpegQuality
     @AppStorage("minSavingPercent") var minSavingPercent =
         Int(Converter.Settings().minSavingFraction * 100)
+    @AppStorage("demotedTextFormat") var demotedTextFormat =
+        Converter.Settings().demotedTextFormat.rawValue
 
     private var worker: Task<Void, Never>?
 
@@ -96,6 +98,8 @@ final class AppModel: ObservableObject {
         s.ocr = ocrEnabled
         s.jpegQuality = jpegQuality
         s.minSavingFraction = Double(minSavingPercent) / 100
+        s.demotedTextFormat =
+            Converter.DemotedTextFormat(rawValue: demotedTextFormat) ?? .gray4
         return s
     }
 

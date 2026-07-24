@@ -1,3 +1,4 @@
+import PressKit
 import SwiftUI
 
 @main
@@ -59,6 +60,16 @@ struct SettingsView: View {
                 Text("Medium").tag(0.6)
                 Text("High").tag(0.8)
             }
+            Picker("Low-res text pages", selection: $model.demotedTextFormat) {
+                Text("4-bit grayscale (crisper, smaller)")
+                    .tag(Converter.DemotedTextFormat.gray4.rawValue)
+                Text("Grayscale JPEG (smoother tones)")
+                    .tag(Converter.DemotedTextFormat.jpeg.rawValue)
+            }
+            .help(
+                "Pages whose print is too small to survive black & white "
+                    + "stay grayscale; this picks their encoding"
+            )
             Picker("Minimum saving to convert", selection: $model.minSavingPercent) {
                 ForEach([10, 20, 30, 50], id: \.self) { Text("\($0)%").tag($0) }
             }

@@ -52,7 +52,9 @@ compact PDFs at scan time.
 - **Legibility beats compression** — after binarising, the result is
   compared against the grayscale it came from; pages whose print is too
   small for their scan resolution to survive 1-bit (measured damage,
-  not a dpi rule) stay grayscale JPEG instead.
+  not a dpi rule) stay grayscale instead — 4-bit Flate by default
+  (crisper *and* smaller than JPEG on document content), or JPEG via
+  Settings.
 - **Searchable** — a fresh invisible text layer via Apple's Vision OCR
   on every converted page. No cloud, no external tools.
 - **Never destructive** — output goes to a separate folder mirroring

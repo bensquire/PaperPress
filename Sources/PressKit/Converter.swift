@@ -19,12 +19,22 @@ public enum Converter {
         /// else the original is copied through unchanged.
         public var minSavingFraction = 0.2
         /// A binarised text page whose measured damage (see
-        /// Binarize.damage) exceeds this stays grayscale JPEG instead:
+        /// Binarize.damage) exceeds this stays grayscale instead:
         /// print too small for the source resolution cannot survive any
         /// threshold, and legibility beats compression. Calibrated on real
         /// receipts: destroyed pages score ~0.31, worst acceptable ~0.22.
         public var maxG4Damage = 0.26
+        /// Format for those demoted text pages. 4-bit grayscale is both
+        /// smaller than JPEG q0.6 on document content and crisper (no DCT
+        /// ringing); JPEG remains for anyone preferring smooth tones.
+        /// Photographic pages always use JPEG.
+        public var demotedTextFormat = DemotedTextFormat.gray4
         public init() {}
+    }
+
+    public enum DemotedTextFormat: String, Sendable, CaseIterable {
+        case gray4
+        case jpeg
     }
 
     /// Pages are classified on a cheap render at this resolution, so the
@@ -115,12 +125,16 @@ public enum Converter {
                     } else {
                         try PDFRender.gray(page: page, dpi: dpi)
                     }
-                guard
-                    let jpeg = gray.jpegData(quality: settings.jpegQuality, dpi: dpi)
-                else {
-                    throw PressError.scanFailed("JPEG encode failed")
+                if demotedGray != nil, settings.demotedTextFormat == .gray4 {
+                    content = .gray4Flate(Gray4.encode(gray))
+                } else {
+                    guard
+                        let jpeg = gray.jpegData(quality: settings.jpegQuality, dpi: dpi)
+                    else {
+                        throw PressError.scanFailed("JPEG encode failed")
+                    }
+                    content = .jpegGray(jpeg, width: gray.width, height: gray.height)
                 }
-                content = .jpegGray(jpeg, width: gray.width, height: gray.height)
                 ocrImage = gray.cgImage
                 kinds.append(.photo)
             }
