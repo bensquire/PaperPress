@@ -10,6 +10,47 @@ public enum FolderScanner {
         public var id: String { relativePath }
     }
 
+    /// Expands a dropped/chosen mix of PDF files and folders into items.
+    /// Folders scan recursively; with more than one source, each folder's
+    /// items are prefixed with the folder name so two sources can't
+    /// collide. Duplicate source files are dropped (first wins); duplicate
+    /// output names get a numbered suffix.
+    public static func items(for urls: [URL]) -> [Item] {
+        var expanded: [Item] = []
+        for url in urls {
+            let isDir =
+                (try? url.resourceValues(forKeys: [.isDirectoryKey]))?
+                .isDirectory == true
+            if isDir {
+                let prefix = urls.count > 1 ? url.lastPathComponent + "/" : ""
+                expanded += pdfs(under: url).map {
+                    Item(url: $0.url, relativePath: prefix + $0.relativePath)
+                }
+            } else if url.pathExtension.lowercased() == "pdf" {
+                expanded.append(Item(url: url, relativePath: url.lastPathComponent))
+            }
+        }
+
+        var seenSources = Set<String>()
+        var seenPaths = Set<String>()
+        var items: [Item] = []
+        for item in expanded {
+            guard seenSources.insert(item.url.standardizedFileURL.path).inserted
+            else { continue }
+            var path = item.relativePath
+            var n = 2
+            while !seenPaths.insert(path).inserted {
+                let base = (item.relativePath as NSString).deletingPathExtension
+                path = "\(base)-\(n).pdf"
+                n += 1
+            }
+            items.append(Item(url: item.url, relativePath: path))
+        }
+        return items.sorted {
+            $0.relativePath.localizedStandardCompare($1.relativePath) == .orderedAscending
+        }
+    }
+
     public static func pdfs(under root: URL) -> [Item] {
         let fm = FileManager.default
         guard

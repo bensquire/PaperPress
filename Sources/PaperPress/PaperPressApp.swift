@@ -24,7 +24,7 @@ struct PaperPressApp: App {
         }
         .commands {
             CommandGroup(after: .newItem) {
-                Button("Open Folder…") { model.chooseSourceFolder() }
+                Button("Open…") { model.chooseSource() }
                     .keyboardShortcut("o", modifiers: .command)
                     .disabled(model.busy)
                 Button("Convert…") { model.chooseOutputAndConvert() }

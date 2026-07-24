@@ -41,6 +41,11 @@ public enum Converter {
         report: PDFInspector.Report, to outURL: URL,
         settings: Settings = Settings()
     ) throws -> FileResult {
+        guard outURL.standardizedFileURL != report.url.standardizedFileURL else {
+            throw PressError.scanFailed(
+                "Writing \(outURL.lastPathComponent) here would overwrite the original"
+            )
+        }
         if case .passThrough = report.verdict {
             return try passThrough(report, to: outURL, kinds: [])
         }

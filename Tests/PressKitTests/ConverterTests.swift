@@ -114,6 +114,20 @@ final class ConverterTests: FixtureTestCase {
         XCTAssertNil(written.range(of: Data("/Width 2480".utf8)))
     }
 
+    func test_convert_ontoItsOwnSource_throwsAndLeavesOriginalIntact() throws {
+        // Arrange — output path == source path (loose file, parent chosen
+        // as the output folder)
+        let data = Fixtures.bornDigitalPDF()
+        let src = Fixtures.write(data, to: dir, name: "loose.pdf")
+        let report = try PDFInspector.inspect(src)
+
+        // Act / Assert
+        XCTAssertThrowsError(
+            try Converter.convert(report: report, to: src, settings: noOCR)
+        )
+        XCTAssertEqual(try Data(contentsOf: src), data)
+    }
+
     func test_convert_preservesSourceModificationDate() throws {
         // Arrange
         let page = Fixtures.textPage(width: 2480, height: 3508, noise: true)
@@ -135,6 +149,78 @@ final class ConverterTests: FixtureTestCase {
             try FileManager.default.attributesOfItem(atPath: out.path)[.modificationDate]
             as? Date
         XCTAssertEqual(outDate, past)
+    }
+}
+
+final class FolderScannerItemsTests: FixtureTestCase {
+    private func touch(_ path: String) -> URL {
+        let url = dir.appendingPathComponent(path)
+        try? FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        FileManager.default.createFile(atPath: url.path, contents: Data())
+        return url
+    }
+
+    func test_items_mixedFolderAndLooseFile_expandsBoth() {
+        // Arrange
+        _ = touch("Folder/inner/a.pdf")
+        let loose = touch("elsewhere/loose.pdf")
+
+        // Act
+        let items = FolderScanner.items(
+            for: [dir.appendingPathComponent("Folder"), loose]
+        )
+
+        // Assert — multi-source, so the folder's items carry its name
+        XCTAssertEqual(items.map(\.relativePath), ["Folder/inner/a.pdf", "loose.pdf"])
+    }
+
+    func test_items_singleFolder_keepsUnprefixedMirroring() {
+        // Arrange
+        _ = touch("Folder/inner/a.pdf")
+
+        // Act
+        let items = FolderScanner.items(for: [dir.appendingPathComponent("Folder")])
+
+        // Assert
+        XCTAssertEqual(items.map(\.relativePath), ["inner/a.pdf"])
+    }
+
+    func test_items_duplicateNames_getNumberedSuffix() {
+        // Arrange — two loose files with the same name from different folders
+        let one = touch("one/scan.pdf")
+        let two = touch("two/scan.pdf")
+
+        // Act
+        let items = FolderScanner.items(for: [one, two])
+
+        // Assert
+        XCTAssertEqual(items.map(\.relativePath).sorted(), ["scan-2.pdf", "scan.pdf"])
+    }
+
+    func test_items_sameSourceTwice_isDeduped() {
+        // Arrange — a file dropped directly AND inside a dropped folder
+        let inFolder = touch("Folder/doc.pdf")
+
+        // Act
+        let items = FolderScanner.items(
+            for: [dir.appendingPathComponent("Folder"), inFolder]
+        )
+
+        // Assert
+        XCTAssertEqual(items.count, 1)
+    }
+
+    func test_items_nonPDFLooseFile_isIgnored() {
+        // Arrange
+        let txt = touch("notes.txt")
+
+        // Act
+        let items = FolderScanner.items(for: [txt])
+
+        // Assert
+        XCTAssertTrue(items.isEmpty)
     }
 }
 

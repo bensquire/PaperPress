@@ -77,12 +77,42 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    // MARK: Idle / drop state
+    // MARK: Drop handling
 
     @State private var dropHovering = false
 
+    /// Gather every dropped URL (PDFs and folders), then hand them to the
+    /// model in one call. Returns false if the drag carries no file URLs.
+    private func handleDrop(_ providers: [NSItemProvider], append: Bool) -> Bool {
+        let candidates = providers.filter { $0.canLoadObject(ofClass: URL.self) }
+        guard !candidates.isEmpty else { return false }
+        Task { @MainActor in
+            var urls: [URL] = []
+            for provider in candidates {
+                let url = await withCheckedContinuation { continuation in
+                    _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                        continuation.resume(returning: url)
+                    }
+                }
+                guard let url else { continue }
+                let isDir =
+                    (try? url.resourceValues(forKeys: [.isDirectoryKey]))?
+                    .isDirectory == true
+                if isDir || url.pathExtension.lowercased() == "pdf" {
+                    urls.append(url)
+                }
+            }
+            if !urls.isEmpty {
+                model.analyse(urls: urls, append: append)
+            }
+        }
+        return true
+    }
+
+    // MARK: Idle / drop state
+
     private var dropState: some View {
-        centeredState(title: "Drop a folder of scanned PDFs") {
+        centeredState(title: "Drop scanned PDFs, or folders of them") {
             Image(systemName: "folder.badge.gearshape")
                 .font(.system(size: 64, weight: .thin))
                 .foregroundStyle(.tertiary)
@@ -91,9 +121,9 @@ struct ContentView: View {
                 .font(.callout)
                 .foregroundStyle(.tertiary)
             Button {
-                model.chooseSourceFolder()
+                model.chooseSource()
             } label: {
-                Label("Choose Folder", systemImage: "folder")
+                Label("Choose PDFs or Folder", systemImage: "folder")
                     .padding(.horizontal, 10)
                     .padding(.vertical, 4)
             }
@@ -112,17 +142,7 @@ struct ContentView: View {
                 .padding(16)
         )
         .onDrop(of: [.fileURL], isTargeted: $dropHovering) { providers in
-            guard let provider = providers.first else { return false }
-            _ = provider.loadObject(ofClass: URL.self) { url, _ in
-                guard let url,
-                    (try? url.resourceValues(forKeys: [.isDirectoryKey]))?
-                        .isDirectory == true
-                else { return }
-                Task { @MainActor in
-                    model.analyse(folder: url)
-                }
-            }
-            return true
+            handleDrop(providers, append: false)
         }
     }
 
@@ -153,6 +173,13 @@ struct ContentView: View {
     // MARK: Review table
 
     private var reviewTable: some View {
+        table
+            .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+                handleDrop(providers, append: true)
+            }
+    }
+
+    private var table: some View {
         Table(model.rows) {
             TableColumn("") { row in
                 Toggle(
@@ -330,7 +357,7 @@ struct ContentView: View {
         case .idle:
             return "Originals are never modified"
         case .analysing, .review:
-            return model.sourceURL?.path ?? ""
+            return model.sourceLabel
         case .converting:
             return "Writing to \(model.outputURL?.path ?? "")"
         case .done:

@@ -57,7 +57,7 @@ final class AppModel: ObservableObject {
 
     @Published var phase = Phase.idle
     @Published var rows: [FileRow] = []
-    @Published var sourceURL: URL?
+    @Published var sourceURLs: [URL] = []
     @Published var outputURL: URL?
     @Published var errorText: String?
 
@@ -74,7 +74,7 @@ final class AppModel: ObservableObject {
 
     init(initialFolder: URL? = nil) {
         if let initialFolder {
-            analyse(folder: initialFolder)
+            analyse(urls: [initialFolder])
         }
     }
 
@@ -123,34 +123,60 @@ final class AppModel: ObservableObject {
 
     // MARK: Analyse
 
-    func chooseSourceFolder() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.message = "Choose a folder of scanned PDFs"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        analyse(folder: url)
+    var sourceLabel: String {
+        switch sourceURLs.count {
+        case 0: ""
+        case 1: sourceURLs[0].path
+        case let n: "\(n) dropped items"
+        }
     }
 
-    func analyse(folder: URL) {
+    func chooseSource() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = true
+        panel.allowedContentTypes = [.pdf]
+        panel.allowsMultipleSelection = true
+        panel.message = "Choose scanned PDFs, or folders of them"
+        guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
+        analyse(urls: panel.urls, append: phase == .review)
+    }
+
+    /// Expand the given PDFs/folders and inspect them. With append=true
+    /// (drop onto the review table) new items join the existing rows;
+    /// otherwise they replace them.
+    func analyse(urls: [URL], append: Bool = false) {
         worker?.cancel()
-        sourceURL = folder
         outputURL = nil
         errorText = nil
-        rows = []
+        if append {
+            sourceURLs += urls
+        } else {
+            sourceURLs = urls
+            rows = []
+        }
+        let existingSources = Set(rows.map { $0.item.url.standardizedFileURL.path })
+        let existingPaths = Set(rows.map(\.id))
         phase = .analysing(done: 0, of: 0)
         worker = Task.detached(priority: .userInitiated) { [self] in
-            let items = FolderScanner.pdfs(under: folder)
+            let items = FolderScanner.items(for: urls).filter {
+                !existingSources.contains($0.url.standardizedFileURL.path)
+                    && !existingPaths.contains($0.relativePath)
+            }
             guard !items.isEmpty else {
                 await MainActor.run {
-                    self.phase = .idle
-                    self.errorText = "No PDFs found in \(folder.lastPathComponent)"
+                    self.phase = append ? .review : .idle
+                    if !append {
+                        self.errorText = "No PDFs found"
+                    }
                 }
                 return
             }
-            await MainActor.run {
-                self.rows = items.map { FileRow(item: $0) }
+            let base = await MainActor.run { () -> Int in
+                let base = self.rows.count
+                self.rows += items.map { FileRow(item: $0) }
                 self.phase = .analysing(done: 0, of: items.count)
+                return base
             }
             for (i, item) in items.enumerated() {
                 if Task.isCancelled { return }
@@ -164,9 +190,9 @@ final class AppModel: ObservableObject {
                 let done = i + 1
                 await MainActor.run { [report, error] in
                     guard !Task.isCancelled else { return }
-                    self.rows[i].report = report
-                    self.rows[i].error = error
-                    self.rows[i].included = report?.verdict == .convert
+                    self.rows[base + i].report = report
+                    self.rows[base + i].error = error
+                    self.rows[base + i].included = report?.verdict == .convert
                     self.phase = .analysing(done: done, of: items.count)
                 }
             }
@@ -179,7 +205,6 @@ final class AppModel: ObservableObject {
     // MARK: Convert
 
     func chooseOutputAndConvert() {
-        guard let sourceURL else { return }
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
@@ -187,7 +212,11 @@ final class AppModel: ObservableObject {
         panel.prompt = "Convert"
         panel.message = "Choose where to write the compressed copies"
         guard panel.runModal() == .OK, let out = panel.url else { return }
-        guard out.standardizedFileURL != sourceURL.standardizedFileURL else {
+        guard
+            !sourceURLs.contains(where: {
+                $0.standardizedFileURL == out.standardizedFileURL
+            })
+        else {
             errorText = "Choose a different folder than the source"
             return
         }
@@ -263,7 +292,7 @@ final class AppModel: ObservableObject {
         worker?.cancel()
         worker = nil
         rows = []
-        sourceURL = nil
+        sourceURLs = []
         outputURL = nil
         errorText = nil
         phase = .idle
