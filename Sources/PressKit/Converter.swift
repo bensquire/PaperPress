@@ -21,9 +21,11 @@ public enum Converter {
         /// A binarised text page whose measured damage (see
         /// Binarize.damage) exceeds this stays grayscale instead:
         /// print too small for the source resolution cannot survive any
-        /// threshold, and legibility beats compression. Calibrated on real
-        /// receipts: destroyed pages score ~0.31, worst acceptable ~0.22.
-        public var maxG4Damage = 0.26
+        /// threshold, and legibility beats compression. Calibrated by
+        /// magnified inspection of real receipts and certificates:
+        /// visually clean pages score <= 0.177, visibly degraded ones
+        /// (clogged counters, merged strokes) >= 0.191.
+        public var maxG4Damage = 0.18
         /// Format for those demoted text pages. 4-bit grayscale is both
         /// smaller than JPEG q0.6 on document content and crisper (no DCT
         /// ringing); JPEG remains for anyone preferring smooth tones.
