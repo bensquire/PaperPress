@@ -49,6 +49,10 @@ compact PDFs at scan time.
 - **Photos survive** — pages that are actually photographic (histogram
   and local-contrast analysis, not guesswork) are kept as grayscale
   JPEG instead of being dithered to mush. One document can mix both.
+- **Legibility beats compression** — after binarising, the result is
+  compared against the grayscale it came from; pages whose print is too
+  small for their scan resolution to survive 1-bit (measured damage,
+  not a dpi rule) stay grayscale JPEG instead.
 - **Searchable** — a fresh invisible text layer via Apple's Vision OCR
   on every converted page. No cloud, no external tools.
 - **Never destructive** — output goes to a separate folder mirroring

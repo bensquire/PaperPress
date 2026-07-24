@@ -65,4 +65,31 @@ final class BinarizeTests: XCTestCase {
         let disagree = zip(adaptive.ink, global.ink).filter { $0 != $1 }.count
         XCTAssertLessThan(Double(disagree) / Double(adaptive.ink.count), 0.01)
     }
+
+    func test_damage_cleanBinarisation_scoresLow() {
+        // Arrange
+        let page = Fixtures.textPage(noise: true)
+
+        // Act
+        let bw = Binarize.sauvola(page, dpi: 300)
+        let damage = Binarize.damage(page, bw)
+
+        // Assert — well under the G4 fallback threshold
+        XCTAssertLessThan(damage, 0.15)
+    }
+
+    func test_damage_erasedInk_scoresHigh() {
+        // Arrange — a binarisation that lost every stroke (all paper)
+        let page = Fixtures.textPage(noise: true)
+        let blank = Pipeline.BinaryImage(
+            width: page.width, height: page.height,
+            ink: [Bool](repeating: false, count: page.width * page.height)
+        )
+
+        // Act
+        let damage = Binarize.damage(page, blank)
+
+        // Assert — destroying all content must score far above the threshold
+        XCTAssertGreaterThan(damage, 0.4)
+    }
 }

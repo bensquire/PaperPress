@@ -18,6 +18,12 @@ public enum Converter {
         /// Output must be at least this fraction smaller than the input,
         /// else the original is copied through unchanged.
         public var minSavingFraction = 0.2
+        /// A binarised text page whose measured damage (see
+        /// Binarize.damage) exceeds this stays grayscale JPEG instead:
+        /// print too small for the source resolution cannot survive any
+        /// threshold, and legibility beats compression. Calibrated on real
+        /// receipts: destroyed pages score ~0.31, worst acceptable ~0.22.
+        public var maxG4Damage = 0.26
         public init() {}
     }
 
@@ -70,25 +76,33 @@ public enum Converter {
             let textDpi = max(72, settings.dpiCap)
 
             let probe = try PDFRender.gray(page: page, dpi: min(probeDpi, textDpi))
-            let kind = PageClassifier.classify(probe)
-            kinds.append(kind)
-            let dpi =
-                kind == .photo
-                ? max(72, min(nativeDpi, settings.photoDpiCap))
-                : textDpi
-            let gray =
-                dpi == min(probeDpi, textDpi)
-                ? probe
-                : try PDFRender.gray(page: page, dpi: dpi)
+            var kind = PageClassifier.classify(probe)
 
-            let content: PDFWriter.Content
-            let ocrImage: CGImage?
-            switch kind {
-            case .text:
-                let (stream, packed) = try encodeG4(gray, dpi: dpi)
-                content = .g4(stream)
-                ocrImage = packed.cgImage
-            case .photo:
+            var content: PDFWriter.Content?
+            var ocrImage: CGImage?
+            var dpi = textDpi
+            if kind == .text {
+                let gray =
+                    textDpi == min(probeDpi, textDpi)
+                    ? probe
+                    : try PDFRender.gray(page: page, dpi: textDpi)
+                let bw = Binarize.sauvola(gray, dpi: textDpi)
+                if Binarize.damage(gray, bw) > settings.maxG4Damage {
+                    // Print too small for the source resolution — no
+                    // threshold keeps it legible. Stay grayscale.
+                    kind = .photo
+                } else {
+                    let (stream, packed) = try encodeG4(binarized: bw, dpi: textDpi)
+                    content = .g4(stream)
+                    ocrImage = packed.cgImage
+                }
+            }
+            if kind == .photo {
+                dpi = max(72, min(nativeDpi, settings.photoDpiCap))
+                let gray =
+                    dpi == min(probeDpi, textDpi)
+                    ? probe
+                    : try PDFRender.gray(page: page, dpi: dpi)
                 guard
                     let jpeg = gray.jpegData(quality: settings.jpegQuality, dpi: dpi)
                 else {
@@ -97,11 +111,12 @@ public enum Converter {
                 content = .jpegGray(jpeg, width: gray.width, height: gray.height)
                 ocrImage = gray.cgImage
             }
+            kinds.append(kind)
             var words: [OCR.Word] = []
             if settings.ocr, let img = ocrImage {
                 words = try OCR.recognize(cgImage: img)
             }
-            pages.append(PDFWriter.Page(content: content, dpi: dpi, ocrWords: words))
+            pages.append(PDFWriter.Page(content: content!, dpi: dpi, ocrWords: words))
         }
 
         let data = PDFWriter.build(pages: pages)
@@ -128,7 +143,13 @@ public enum Converter {
     public static func encodeG4(_ gray: Pipeline.GrayImage, dpi: Int) throws
         -> (stream: G4.Stream, page: Pipeline.ProcessedPage)
     {
-        var bw = Binarize.sauvola(gray, dpi: dpi)
+        try encodeG4(binarized: Binarize.sauvola(gray, dpi: dpi), dpi: dpi)
+    }
+
+    static func encodeG4(binarized: Pipeline.BinaryImage, dpi: Int) throws
+        -> (stream: G4.Stream, page: Pipeline.ProcessedPage)
+    {
+        var bw = binarized
         // The page is already cropped to the paper — despeckle only;
         // removing border-touching components could eat real content.
         Pipeline.cleanComponents(&bw, removeBorder: false)

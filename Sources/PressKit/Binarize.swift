@@ -12,6 +12,72 @@ public enum Binarize {
     /// Sauvola dynamic-range constant (half the gray range).
     static let dynamicRange = 128.0
 
+    /// How much a binarisation damaged a page, 0…1-ish. Both images are
+    /// box-downsampled and the binary one is mapped back onto the gray
+    /// ink/paper levels; the score is their mean disagreement over content
+    /// blocks, normalised by the ink-paper contrast. Legible binarisation
+    /// reproduces the downsampled gray closely (small print blurs the same
+    /// way in both); destroyed print — merged or fragmented strokes —
+    /// diverges hard.
+    public static func damage(
+        _ g: Pipeline.GrayImage, _ bw: Pipeline.BinaryImage, block: Int = 4
+    ) -> Double {
+        let w = g.width, h = g.height
+        let sw = w / block, sh = h / block
+        guard sw > 0, sh > 0 else { return 0 }
+
+        let t = Int(Pipeline.otsuThreshold(g))
+        var inkSum = 0.0, inkN = 0.0, paperSum = 0.0, paperN = 0.0
+        for p in g.pixels {
+            if Int(p) < t {
+                inkSum += Double(p)
+                inkN += 1
+            } else {
+                paperSum += Double(p)
+                paperN += 1
+            }
+        }
+        guard inkN > 0, paperN > 0 else { return 0 }
+        let inkLevel = inkSum / inkN
+        let paperLevel = paperSum / paperN
+        let contrast = paperLevel - inkLevel
+        guard contrast > 20 else { return 0 }
+
+        var diffSum = 0.0
+        var blocks = 0.0
+        for by in 0..<sh {
+            for bx in 0..<sw {
+                var gSum = 0.0
+                var inkFrac = 0.0
+                var gMin = 255.0
+                var gMax = 0.0
+                for dy in 0..<block {
+                    let row = (by * block + dy) * w + bx * block
+                    for dx in 0..<block {
+                        let v = Double(g.pixels[row + dx])
+                        gSum += v
+                        gMin = min(gMin, v)
+                        gMax = max(gMax, v)
+                        if bw.ink[row + dx] { inkFrac += 1 }
+                    }
+                }
+                let n = Double(block * block)
+                let gMean = gSum / n
+                // Only structured content blocks: dark enough to hold ink
+                // AND locally contrasty (text strokes/edges). Flat gray —
+                // decorative banners, tints — is continuous-tone that 1-bit
+                // legitimately drops; it must not dominate the score.
+                guard gMean < paperLevel - 0.15 * contrast,
+                    gMax - gMin > 0.3 * contrast
+                else { continue }
+                let bMean = (inkFrac / n) * inkLevel + (1 - inkFrac / n) * paperLevel
+                diffSum += abs(bMean - gMean) / contrast
+                blocks += 1
+            }
+        }
+        return blocks > 0 ? diffSum / blocks : 0
+    }
+
     /// Adaptive threshold. `k` controls strictness (higher = less ink);
     /// the literature uses 0.2–0.5, but faded print sits barely below its
     /// local mean, so PaperPress runs gentler (0.15) — measured on real
