@@ -56,3 +56,40 @@ final class EdgeCleanTests: XCTestCase {
         XCTAssertEqual(g.pixels, before)
     }
 }
+
+final class EdgeCleanConverterTests: FixtureTestCase {
+    func test_convert_lowResTextPageWithEdgeBand_isCleanedInOutput() throws {
+        // Arrange — a 75 dpi text page with a black scan band down the
+        // left edge: the resolution gate demotes it to grayscale, and the
+        // band must still be cleaned on that path
+        var page = Fixtures.textPage(width: 620, height: 800, noise: true)
+        for y in 0..<800 {
+            for x in 0..<12 {
+                page.pixels[y * 620 + x] = 10
+            }
+        }
+        let src = Fixtures.write(
+            Fixtures.scannedPDF(pages: [page], dpi: 75), to: dir, name: "band.pdf"
+        )
+        let out = dir.appendingPathComponent("out/band.pdf")
+        let report = try PDFInspector.inspect(src)
+        var settings = Converter.Settings()
+        settings.ocr = false
+        settings.minSavingFraction = -1
+
+        // Act
+        _ = try Converter.convert(report: report, to: out, settings: settings)
+
+        // Assert — the written page's left edge is paper, not band
+        let doc = try XCTUnwrap(CGPDFDocument(out as CFURL))
+        let rendered = try PDFRender.gray(page: try XCTUnwrap(doc.page(at: 1)), dpi: 75)
+        var darkEdge = 0
+        for y in 0..<rendered.height {
+            if rendered.pixels[y * rendered.width + 4] < 100 { darkEdge += 1 }
+        }
+        XCTAssertLessThan(
+            darkEdge, rendered.height / 20,
+            "edge band should be whitened in the demoted grayscale output"
+        )
+    }
+}

@@ -145,14 +145,20 @@ public enum Converter {
                 kinds.append(.text)
             } else {
                 dpi = max(72, min(nativeDpi, settings.photoDpiCap))
-                let gray: Pipeline.GrayImage
+                var gray: Pipeline.GrayImage
                 if let demotedGray {
+                    // Damage-demoted: reusing the full-res render, already
+                    // edge-cleaned.
                     gray = demotedGray.resampled(scale: Double(dpi) / Double(textDpi))
+                } else if dpi == probeRenderDpi {
+                    gray = probe  // already cleaned
                 } else {
-                    gray =
-                        dpi == probeRenderDpi
-                        ? probe
-                        : try PDFRender.gray(page: page, dpi: dpi)
+                    gray = try PDFRender.gray(page: page, dpi: dpi)
+                    // Resolution-demoted text renders fresh here and needs
+                    // its own edge cleaning; photos are never cleaned.
+                    if isText, settings.removeScanEdges {
+                        EdgeClean.removeScanBorders(&gray, dpi: dpi)
+                    }
                 }
                 // Text (demoted by resolution or damage) keeps the
                 // configured grayscale format; photos are always JPEG.
