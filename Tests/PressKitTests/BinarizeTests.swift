@@ -116,4 +116,46 @@ final class BinarizeTests: XCTestCase {
         // Assert — destroying all content must score far above the threshold
         XCTAssertGreaterThan(damage, 0.4)
     }
+
+    func test_sauvola_bandedMatchesBruteForceReference() {
+        // Arrange — small random-ish page spanning several bands so the
+        // strip reuse and band boundaries are exercised
+        var rng = SeededRandom()
+        let w = 90, h = 300
+        var pixels = [UInt8](repeating: 0, count: w * h)
+        for i in 0..<pixels.count {
+            pixels[i] = 150 &+ (rng.next() % 100)
+        }
+        let g = Pipeline.GrayImage(width: w, height: h, pixels: pixels)
+        let dpi = 300
+        let window = max(25, dpi / 6) | 1
+        let r = window / 2
+
+        // Act
+        let banded = Binarize.sauvola(g, dpi: dpi)
+
+        // Assert — every pixel matches a brute-force local mean/std Sauvola
+        for y in stride(from: 0, to: h, by: 7) {
+            for x in stride(from: 0, to: w, by: 5) {
+                var sum = 0.0
+                var sq = 0.0
+                var n = 0.0
+                for yy in max(0, y - r)..<min(h, y + r + 1) {
+                    for xx in max(0, x - r)..<min(w, x + r + 1) {
+                        let v = Double(g.pixels[yy * w + xx])
+                        sum += v
+                        sq += v * v
+                        n += 1
+                    }
+                }
+                let mean = sum / n
+                let sd = max(0, sq / n - mean * mean).squareRoot()
+                let t = mean * (1 + 0.15 * (sd / 128.0 - 1))
+                XCTAssertEqual(
+                    banded[x, y], Double(g.pixels[y * w + x]) < t,
+                    "mismatch at (\(x),\(y))"
+                )
+            }
+        }
+    }
 }

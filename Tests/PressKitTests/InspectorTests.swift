@@ -63,6 +63,24 @@ final class PDFInspectorTests: FixtureTestCase {
         XCTAssertEqual(report.verdict, .passThrough(.alreadyOneBit))
     }
 
+    func test_inspect_smallScanFile_passesThroughAsAlreadySmall() throws {
+        // Arrange — a genuine scan, but already compact for its page count
+        // (mostly blank paper compresses well under the 45KB/page bar)
+        let page = Fixtures.blockPage()
+        let url = Fixtures.write(
+            Fixtures.scannedPDF(pages: [page], dpi: 75, quality: 0.3),
+            to: dir, name: "small.pdf"
+        )
+        let bytes = try Data(contentsOf: url).count
+        XCTAssertLessThan(bytes, PDFInspector.smallEnoughBytesPerPage, "fixture sanity")
+
+        // Act
+        let report = try PDFInspector.inspect(url)
+
+        // Assert
+        XCTAssertEqual(report.verdict, .passThrough(.alreadySmall))
+    }
+
     func test_inspect_missingFile_throws() {
         // Arrange
         let url = dir.appendingPathComponent("nope.pdf")

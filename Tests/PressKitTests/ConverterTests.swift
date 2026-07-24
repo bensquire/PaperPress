@@ -198,6 +198,53 @@ final class ConverterTests: FixtureTestCase {
         XCTAssertNil(written.range(of: Data("/BitsPerComponent 4".utf8)))
     }
 
+    func test_convert_damageDemotion_staysGrayscaleAtAdequateResolution() throws {
+        // Arrange — an adequate-resolution source (150 dpi, above the gate)
+        // with the damage backstop tightened so this page's measured score
+        // exceeds it: exercises the damage-demotion arm the dpi gate
+        // normally shields
+        let page = Fixtures.renderedTextPage(fontSize: 14, ink: 0.1)
+        let src = Fixtures.write(
+            Fixtures.scannedPDF(pages: [page], dpi: 150), to: dir, name: "adequate.pdf"
+        )
+        let out = dir.appendingPathComponent("out/adequate.pdf")
+        let report = try PDFInspector.inspect(src)
+        var settings = noOCR
+        settings.minSavingFraction = -1
+        settings.maxG4Damage = 0.01
+
+        // Act
+        let result = try Converter.convert(report: report, to: out, settings: settings)
+
+        // Assert — demoted by damage, not resolution, and grayscale
+        XCTAssertEqual(result.pageKinds, [.photo])
+        let written = try Data(contentsOf: out)
+        XCTAssertNil(written.range(of: Data("CCITTFaxDecode".utf8)))
+        XCTAssertNotNil(written.range(of: Data("/BitsPerComponent 4".utf8)))
+    }
+
+    func test_convert_mixedDocument_encodesEachPageByKind() throws {
+        // Arrange — a text page and a photo page in one file
+        let text = Fixtures.textPage(width: 1240, height: 1754, noise: true)
+        let photo = Fixtures.photoPage(width: 1240, height: 1754)
+        let src = Fixtures.write(
+            Fixtures.scannedPDF(pages: [text, photo], dpi: 150), to: dir, name: "mixed.pdf"
+        )
+        let out = dir.appendingPathComponent("out/mixed.pdf")
+        let report = try PDFInspector.inspect(src)
+        var settings = noOCR
+        settings.minSavingFraction = -1
+
+        // Act
+        let result = try Converter.convert(report: report, to: out, settings: settings)
+
+        // Assert — one G4 page, one JPEG page, in order
+        XCTAssertEqual(result.pageKinds, [.text, .photo])
+        let written = try Data(contentsOf: out)
+        XCTAssertNotNil(written.range(of: Data("CCITTFaxDecode".utf8)))
+        XCTAssertNotNil(written.range(of: Data("DCTDecode".utf8)))
+    }
+
     func test_convert_preservesSourceModificationDate() throws {
         // Arrange
         let page = Fixtures.textPage(width: 2480, height: 3508, noise: true)
