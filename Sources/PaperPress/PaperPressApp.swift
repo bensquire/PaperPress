@@ -3,6 +3,8 @@ import SwiftUI
 
 @main
 struct PaperPressApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+
     // Dev/testing convenience: `PAPERPRESS_FOLDER=/path PaperPress` skips
     // straight to analysing that folder. (An ordinary CLI argument won't
     // do — AppKit treats it as a document to open and then never creates
@@ -19,9 +21,13 @@ struct PaperPressApp: App {
     )
 
     var body: some Scene {
-        WindowGroup("PaperPress") {
+        // Single-instance Window, not WindowGroup: the app has one shared
+        // model, and WindowGroup spawns duplicate clone windows when
+        // Finder sends open-document events.
+        Window("PaperPress", id: "main") {
             ContentView()
                 .environmentObject(model)
+                .onAppear { appDelegate.model = model }
         }
         .commands {
             CommandGroup(after: .newItem) {

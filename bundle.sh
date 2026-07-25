@@ -31,6 +31,37 @@ cat > $APP/Contents/Info.plist <<EOF
   <key>CFBundleShortVersionString</key><string>${VERSION}</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSHighResolutionCapable</key><true/>
+  <key>CFBundleDocumentTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeName</key><string>PDF Document</string>
+      <key>CFBundleTypeRole</key><string>Viewer</string>
+      <key>LSHandlerRank</key><string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array><string>com.adobe.pdf</string></array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key><string>Folder</string>
+      <key>CFBundleTypeRole</key><string>Viewer</string>
+      <key>LSHandlerRank</key><string>None</string>
+      <key>LSItemContentTypes</key>
+      <array><string>public.folder</string></array>
+    </dict>
+  </array>
+  <key>NSServices</key>
+  <array>
+    <dict>
+      <key>NSMenuItem</key>
+      <dict><key>default</key><string>Analyse with PaperPress</string></dict>
+      <key>NSMessage</key><string>analyseWithPaperPress</string>
+      <key>NSPortName</key><string>PaperPress</string>
+      <key>NSSendFileTypes</key>
+      <array>
+        <string>com.adobe.pdf</string>
+        <string>public.folder</string>
+      </array>
+    </dict>
+  </array>
 </dict></plist>
 EOF
 codesign --force --options runtime --timestamp --sign "$IDENTITY" $APP
