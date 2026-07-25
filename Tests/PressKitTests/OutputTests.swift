@@ -24,6 +24,29 @@ final class PDFWriterTests: XCTestCase {
     }
 }
 
+final class PDFWriterProducerTests: XCTestCase {
+    func test_build_stampsPaperPressProducerByDefault() throws {
+        // Arrange / Act
+        let page = Fixtures.textPage()
+        let pdf = PDFWriter.build(
+            pages: [PDFWriter.Page(content: .g4(try Converter.encodeG4(page, dpi: 150)), dpi: 150)]
+        )
+
+        // Assert
+        XCTAssertNotNil(pdf.range(of: Data("/Producer (PaperPress)".utf8)))
+        XCTAssertNotNil(pdf.range(of: Data("/Info ".utf8)))
+    }
+
+    func test_build_fixtureProducerOverridesDefault() {
+        // Arrange / Act — fixtures must look like third-party scans
+        let pdf = Fixtures.scannedPDF(pages: [Fixtures.textPage()], dpi: 150)
+
+        // Assert
+        XCTAssertNil(pdf.range(of: Data("PaperPress".utf8)))
+        XCTAssertNotNil(pdf.range(of: Data(Fixtures.foreignProducer.utf8)))
+    }
+}
+
 final class PressErrorTests: XCTestCase {
     func test_errorDescriptions_areHumanReadable() {
         // Arrange / Act / Assert

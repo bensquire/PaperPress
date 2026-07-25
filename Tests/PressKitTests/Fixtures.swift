@@ -104,6 +104,10 @@ enum Fixtures {
         return Pipeline.GrayImage(width: width, height: height, pixels: pixels)
     }
 
+    /// Producer stamped into fixture scans: they simulate third-party
+    /// files, so they must not carry PaperPress's own idempotency marker.
+    static let foreignProducer = "Test Scanner"
+
     /// Wrap grayscale pages as a "scanned" PDF: one full-page JPEG per page.
     static func scannedPDF(pages: [Pipeline.GrayImage], dpi: Int, quality: Double = 0.95)
         -> Data
@@ -117,7 +121,8 @@ enum Fixtures {
                     ),
                     dpi: dpi
                 )
-            }
+            },
+            producer: foreignProducer
         )
     }
 
@@ -131,7 +136,8 @@ enum Fixtures {
                     content: .g4(try Converter.encodeG4(g, dpi: dpi)),
                     dpi: dpi
                 )
-            }
+            },
+            producer: foreignProducer
         )
     }
 

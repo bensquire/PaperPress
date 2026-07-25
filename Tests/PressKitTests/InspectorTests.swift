@@ -42,11 +42,11 @@ final class PDFInspectorTests: FixtureTestCase {
         let report = try PDFInspector.inspect(url)
 
         // Assert
-        guard case let .scan(dpi, oneBit) = report.pages[0].kind else {
+        guard case let .scan(dpi, compact) = report.pages[0].kind else {
             return XCTFail("expected a scan page, got \(report.pages[0].kind)")
         }
         XCTAssertEqual(dpi, 150)
-        XCTAssertFalse(oneBit)
+        XCTAssertFalse(compact)
     }
 
     func test_inspect_g4PDF_passesThroughAsAlreadyOneBit() throws {
@@ -60,7 +60,7 @@ final class PDFInspectorTests: FixtureTestCase {
         let report = try PDFInspector.inspect(url)
 
         // Assert
-        XCTAssertEqual(report.verdict, .passThrough(.alreadyOneBit))
+        XCTAssertEqual(report.verdict, .passThrough(.alreadyCompact))
     }
 
     func test_inspect_smallScanFile_passesThroughAsAlreadySmall() throws {
@@ -79,6 +79,65 @@ final class PDFInspectorTests: FixtureTestCase {
 
         // Assert
         XCTAssertEqual(report.verdict, .passThrough(.alreadySmall))
+    }
+
+    func test_inspect_ownConvertedOutput_passesThroughAsAlreadyProcessed() throws {
+        // Arrange — convert a low-res text scan (demotes to 4-bit gray)
+        let tiny = Fixtures.renderedTextPage(fontSize: 4, ink: 0.3)
+        let src = Fixtures.write(
+            Fixtures.scannedPDF(pages: [tiny], dpi: 75), to: dir, name: "src.pdf"
+        )
+        let out = dir.appendingPathComponent("out/src.pdf")
+        var settings = Converter.Settings()
+        settings.ocr = false
+        settings.minSavingFraction = -1
+        _ = try Converter.convert(
+            report: try PDFInspector.inspect(src), to: out, settings: settings
+        )
+
+        // Act — re-analyse the output, as a second app run would
+        let report = try PDFInspector.inspect(out)
+
+        // Assert — idempotent: never re-compress our own output
+        XCTAssertEqual(report.verdict, .passThrough(.alreadyProcessed))
+    }
+
+    func test_inspect_ownJPEGOutput_passesThroughAsAlreadyProcessed() throws {
+        // Arrange — same, with the JPEG demoted-format setting
+        let tiny = Fixtures.renderedTextPage(fontSize: 4, ink: 0.3)
+        let src = Fixtures.write(
+            Fixtures.scannedPDF(pages: [tiny], dpi: 75), to: dir, name: "src.pdf"
+        )
+        let out = dir.appendingPathComponent("out/src.pdf")
+        var settings = Converter.Settings()
+        settings.ocr = false
+        settings.minSavingFraction = -1
+        settings.demotedTextFormat = .jpeg
+        _ = try Converter.convert(
+            report: try PDFInspector.inspect(src), to: out, settings: settings
+        )
+
+        // Act
+        let report = try PDFInspector.inspect(out)
+
+        // Assert
+        XCTAssertEqual(report.verdict, .passThrough(.alreadyProcessed))
+    }
+
+    func test_inspect_foreignGray4PDF_passesThroughAsAlreadyCompact() throws {
+        // Arrange — a 4-bit page from another producer (no marker)
+        let page = Fixtures.photoPage(width: 620, height: 800)
+        let pdf = PDFWriter.build(
+            pages: [PDFWriter.Page(content: .gray4Flate(Gray4.encode(page)), dpi: 75)],
+            producer: Fixtures.foreignProducer
+        )
+        let url = Fixtures.write(pdf, to: dir, name: "gray4.pdf")
+
+        // Act
+        let report = try PDFInspector.inspect(url)
+
+        // Assert
+        XCTAssertEqual(report.verdict, .passThrough(.alreadyCompact))
     }
 
     func test_inspect_missingFile_throws() {

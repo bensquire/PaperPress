@@ -8,9 +8,10 @@ import Foundation
 public enum PDFInspector {
     public enum PageKind: Equatable {
         /// Page dominated by one full-page raster image.
-        /// `dpi` is the image's implied resolution; `oneBit` means the
-        /// image is already CCITT/JBIG2 1-bit compressed.
-        case scan(dpi: Int, oneBit: Bool)
+        /// `dpi` is the image's implied resolution; `compact` means the
+        /// image is already archival-compact (1-bit CCITT/JBIG2, or
+        /// 4-bit grayscale).
+        case scan(dpi: Int, compact: Bool)
         /// Real text/vector content, no full-page scan image.
         case bornDigital
     }
@@ -28,7 +29,10 @@ public enum PDFInspector {
 
     public enum PassReason: Equatable {
         case bornDigital
-        case alreadyOneBit
+        /// Carries this app's Producer marker — converting again would
+        /// only re-encode it.
+        case alreadyProcessed
+        case alreadyCompact
         case alreadySmall
     }
 
@@ -58,6 +62,7 @@ public enum PDFInspector {
         let fileBytes =
             (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int)
             .flatMap { $0 } ?? 0
+        let processedHere = producerIsPaperPress(doc)
 
         // One PageInfo per document page, unconditionally — Converter relies
         // on positional alignment with page numbers.
@@ -77,13 +82,15 @@ public enum PDFInspector {
             return false
         }
         let verdict: Verdict
-        if scans.isEmpty {
+        if processedHere {
+            verdict = .passThrough(.alreadyProcessed)
+        } else if scans.isEmpty {
             verdict = .passThrough(.bornDigital)
         } else if scans.allSatisfy({
             if case .scan(_, true) = $0.kind { return true }
             return false
         }) {
-            verdict = .passThrough(.alreadyOneBit)
+            verdict = .passThrough(.alreadyCompact)
         } else if fileBytes / scans.count < smallEnoughBytesPerPage {
             verdict = .passThrough(.alreadySmall)
         } else {
@@ -123,6 +130,18 @@ public enum PDFInspector {
         return max(8_000, Int(px * estimatedBytesPerPixel))
     }
 
+    /// True when the document's Info Producer names this app — output we
+    /// wrote ourselves, already converted.
+    private static func producerIsPaperPress(_ doc: CGPDFDocument) -> Bool {
+        guard let info = doc.info else { return false }
+        var producer: CGPDFStringRef?
+        guard CGPDFDictionaryGetString(info, "Producer", &producer),
+            let producer,
+            let str = CGPDFStringCopyTextString(producer)
+        else { return false }
+        return (str as String).contains("PaperPress")
+    }
+
     // MARK: Page classification
 
     private static func classify(
@@ -146,13 +165,13 @@ public enum PDFInspector {
         guard aspectMatch, dpiX >= 40, dpiX <= 1300, abs(dpiX - dpiY) / dpiX < 0.35 else {
             return .bornDigital
         }
-        return .scan(dpi: Int(dpiX.rounded()), oneBit: img.oneBit)
+        return .scan(dpi: Int(dpiX.rounded()), compact: img.compact)
     }
 
     private struct ImageRef {
         let w: Int
         let h: Int
-        let oneBit: Bool
+        let compact: Bool
     }
 
     private static func largestImage(inPageDict dict: CGPDFDictionaryRef) -> ImageRef? {
@@ -189,13 +208,13 @@ public enum PDFInspector {
                     CGPDFDictionaryGetInteger(sdict, "Height", &h)
                     var bpc: CGPDFInteger = 0
                     CGPDFDictionaryGetInteger(sdict, "BitsPerComponent", &bpc)
-                    let oneBit =
-                        bpc == 1
+                    let compact =
+                        bpc == 1 || bpc == 4
                         || filterNames(sdict).contains { name in
                             name == "CCITTFaxDecode" || name == "JBIG2Decode"
                         }
                     if w * h > (best.map { $0.w * $0.h } ?? 0) {
-                        best = ImageRef(w: w, h: h, oneBit: oneBit)
+                        best = ImageRef(w: w, h: h, compact: compact)
                     }
                 case "Form" where depth < 2:
                     // Some producers wrap the scan image in a Form XObject.

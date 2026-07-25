@@ -47,7 +47,7 @@ public enum PDFWriter {
         }
     }
 
-    public static func build(pages: [Page]) -> Data {
+    public static func build(pages: [Page], producer: String = "PaperPress") -> Data {
         var objects: [Data] = []
         var pageObjectIDs: [Int] = []
 
@@ -148,6 +148,10 @@ public enum PDFWriter {
         let kids = pageObjectIDs.map { "\($0) 0 R" }.joined(separator: " ")
         objects[1] = Data("<</Type/Pages/Kids[\(kids)]/Count \(pageObjectIDs.count)>>".utf8)
         objects[2] = Data("<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>".utf8)
+        // Document Info: the Producer marks output as already converted,
+        // so re-analysing it yields a pass-through verdict (idempotency).
+        let infoID = objects.count + 1
+        objects.append(Data("<</Producer (\(pdfEscape(producer)))>>".utf8))
 
         var out = Data("%PDF-1.4\n%\u{00E2}\u{00E3}\u{00CF}\u{00D3}\n".utf8)
         var offsets: [Int] = []
@@ -165,7 +169,8 @@ public enum PDFWriter {
         out.append(
             Data(
                 """
-                trailer\n<</Size \(objects.count + 1)/Root 1 0 R>>\nstartxref\n\(xrefStart)\n%%EOF
+                trailer\n<</Size \(objects.count + 1)/Root 1 0 R\
+                /Info \(infoID) 0 R>>\nstartxref\n\(xrefStart)\n%%EOF
                 """.utf8
             )
         )

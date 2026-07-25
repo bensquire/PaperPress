@@ -18,7 +18,8 @@ struct FileRow: Identifiable {
         switch report?.verdict {
         case .convert: return "Re-compress"
         case .passThrough(.bornDigital): return "Born digital"
-        case .passThrough(.alreadyOneBit): return "Already 1-bit"
+        case .passThrough(.alreadyProcessed): return "Already converted"
+        case .passThrough(.alreadyCompact): return "Already compact"
         case .passThrough(.alreadySmall): return "Already small"
         case nil: return "…"
         }
@@ -31,8 +32,10 @@ struct FileRow: Identifiable {
             return "Scanned pages that will be re-compressed to compact 1-bit"
         case .passThrough(.bornDigital):
             return "Real text/vector PDF — rasterising it would only make it worse"
-        case .passThrough(.alreadyOneBit):
-            return "Scan is already 1-bit compressed"
+        case .passThrough(.alreadyProcessed):
+            return "Produced by PaperPress — converting again would only re-encode it"
+        case .passThrough(.alreadyCompact):
+            return "Pages are already archival-compact (1-bit or 4-bit)"
         case .passThrough(.alreadySmall):
             return "Already compact for its page count"
         case nil:
