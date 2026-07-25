@@ -131,11 +131,9 @@ final class ConverterTests: FixtureTestCase {
     /// A 75 dpi text source — demoted by the resolution gate (the damage
     /// backstop is covered at the Binarize unit level).
     private func lowResTextReport() throws -> PDFInspector.Report {
-        let tiny = Fixtures.renderedTextPage(fontSize: 4, ink: 0.3)
-        let src = Fixtures.write(
-            Fixtures.scannedPDF(pages: [tiny], dpi: 75), to: dir, name: "tiny.pdf"
+        try PDFInspector.inspect(
+            Fixtures.write(Fixtures.lowResTextScanPDF(), to: dir, name: "tiny.pdf")
         )
-        return try PDFInspector.inspect(src)
     }
 
     func test_convert_demotedTextPage_usesGray4ByDefault() throws {

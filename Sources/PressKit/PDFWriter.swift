@@ -47,7 +47,15 @@ public enum PDFWriter {
         }
     }
 
-    public static func build(pages: [Page], producer: String = "PaperPress") -> Data {
+    /// The marker stamped into every output's Info Producer and checked
+    /// by PDFInspector for idempotency — single source of truth for both
+    /// sides of that contract. A version suffix ("PaperPress 1.2") may be
+    /// appended later; the inspector matches by prefix.
+    public static let producerMarker = "PaperPress"
+
+    public static func build(
+        pages: [Page], producer: String = PDFWriter.producerMarker
+    ) -> Data {
         var objects: [Data] = []
         var pageObjectIDs: [Int] = []
 
@@ -168,12 +176,11 @@ public enum PDFWriter {
         }
         out.append(
             Data(
-                """
-                trailer\n<</Size \(objects.count + 1)/Root 1 0 R\
-                /Info \(infoID) 0 R>>\nstartxref\n\(xrefStart)\n%%EOF
-                """.utf8
+                "trailer\n<</Size \(objects.count + 1)/Root 1 0 R/Info \(infoID) 0 R>>\n"
+                    .utf8
             )
         )
+        out.append(Data("startxref\n\(xrefStart)\n%%EOF".utf8))
         return out
     }
 

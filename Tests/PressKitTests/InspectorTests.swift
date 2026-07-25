@@ -49,7 +49,7 @@ final class PDFInspectorTests: FixtureTestCase {
         XCTAssertFalse(compact)
     }
 
-    func test_inspect_g4PDF_passesThroughAsAlreadyOneBit() throws {
+    func test_inspect_g4PDF_passesThroughAsAlreadyCompact() throws {
         // Arrange
         let page = Fixtures.textPage(width: 1240, height: 1754)
         let url = Fixtures.write(
@@ -81,19 +81,25 @@ final class PDFInspectorTests: FixtureTestCase {
         XCTAssertEqual(report.verdict, .passThrough(.alreadySmall))
     }
 
-    func test_inspect_ownConvertedOutput_passesThroughAsAlreadyProcessed() throws {
-        // Arrange — convert a low-res text scan (demotes to 4-bit gray)
-        let tiny = Fixtures.renderedTextPage(fontSize: 4, ink: 0.3)
-        let src = Fixtures.write(
-            Fixtures.scannedPDF(pages: [tiny], dpi: 75), to: dir, name: "src.pdf"
-        )
+    /// Convert the canonical low-res scan and return the written output.
+    private func convertOwnOutput(
+        format: Converter.DemotedTextFormat = .gray4
+    ) throws -> URL {
+        let src = Fixtures.write(Fixtures.lowResTextScanPDF(), to: dir, name: "src.pdf")
         let out = dir.appendingPathComponent("out/src.pdf")
         var settings = Converter.Settings()
         settings.ocr = false
         settings.minSavingFraction = -1
+        settings.demotedTextFormat = format
         _ = try Converter.convert(
             report: try PDFInspector.inspect(src), to: out, settings: settings
         )
+        return out
+    }
+
+    func test_inspect_ownConvertedOutput_passesThroughAsAlreadyProcessed() throws {
+        // Arrange — convert a low-res text scan (demotes to 4-bit gray)
+        let out = try convertOwnOutput()
 
         // Act — re-analyse the output, as a second app run would
         let report = try PDFInspector.inspect(out)
@@ -104,18 +110,7 @@ final class PDFInspectorTests: FixtureTestCase {
 
     func test_inspect_ownJPEGOutput_passesThroughAsAlreadyProcessed() throws {
         // Arrange — same, with the JPEG demoted-format setting
-        let tiny = Fixtures.renderedTextPage(fontSize: 4, ink: 0.3)
-        let src = Fixtures.write(
-            Fixtures.scannedPDF(pages: [tiny], dpi: 75), to: dir, name: "src.pdf"
-        )
-        let out = dir.appendingPathComponent("out/src.pdf")
-        var settings = Converter.Settings()
-        settings.ocr = false
-        settings.minSavingFraction = -1
-        settings.demotedTextFormat = .jpeg
-        _ = try Converter.convert(
-            report: try PDFInspector.inspect(src), to: out, settings: settings
-        )
+        let out = try convertOwnOutput(format: .jpeg)
 
         // Act
         let report = try PDFInspector.inspect(out)

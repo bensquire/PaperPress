@@ -38,8 +38,12 @@ compact PDFs at scan time.
 
 - **Analyse before convert** — every PDF gets a verdict up front:
   *Re-compress* (fat raster scans), *Born digital* (real text/vector
-  PDFs that rasterising would only ruin), *Already 1-bit*, or *Already
-  small*. Nothing is written until you confirm.
+  PDFs that rasterising would only ruin), *Already converted*, *Already
+  compact* (1-bit or 4-bit), or *Already small*. Nothing is written
+  until you confirm.
+- **Idempotent** — every output is stamped (PDF Producer metadata), so
+  re-analysing a converted folder marks everything *Already converted*
+  and nothing is ever re-encoded generation over generation.
 - **Tiny archival pages** — scan pages are re-rendered at 300 dpi
   (higher-res sources are downsampled; lower-res sources are upsampled
   so the antialiasing they carry becomes smooth 1-bit edges rather than
@@ -108,7 +112,7 @@ git config core.hooksPath .githooks
 
 ```
 Sources/PressKit/      # engine: inspection, classification, compression
-  PDFInspector.swift   #   verdicts: scan / born-digital / already-1-bit
+  PDFInspector.swift   #   verdicts: convert / born-digital / already-*
   PDFRender.swift      #   page rasteriser (native-dpi, rotation-aware)
   PageClassifier.swift #   text vs photo (paper-peak + smooth-midtone)
   Binarize.swift       #   Sauvola adaptive threshold + worst-region
@@ -152,12 +156,22 @@ scripts/               # DMG packaging
 
 ## Releasing
 
-Push a `v*` tag. CI builds, signs, notarizes, and staples the DMG,
-then publishes a GitHub Release with generated notes:
+Releases are cut by tag. Pushing a `v*` tag makes CI build, sign,
+notarize, and staple the DMG, then publish a GitHub Release with
+generated notes:
 
 ```sh
-git tag v0.1.0 && git push --tags
+git tag v0.1.0
+git push --tags
 ```
+
+The release workflow needs six repository secrets (Settings → Secrets
+and variables → Actions) for signing and notarization:
+`SIGNING_CERTIFICATE_P12_BASE64`, `SIGNING_CERTIFICATE_PASSWORD`,
+`APPLE_TEAM_ID`, `APPLE_API_KEY_BASE64`, `APPLE_API_KEY_ID`,
+`APPLE_API_ISSUER_ID`. A `vX.Y.Z-something` tag (e.g. `v0.2.0-rc1`)
+publishes as a prerelease. Plain pushes only run lint/tests/smoke —
+tags are the only way a release ships.
 
 ## License
 

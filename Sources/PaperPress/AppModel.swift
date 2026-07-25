@@ -13,34 +13,34 @@ struct FileRow: Identifiable {
 
     var id: String { item.relativePath }
 
-    var verdictLabel: String {
-        if error != nil { return "Unreadable" }
+    /// One switch owns both the badge label and its tooltip, so a new
+    /// verdict can't be added to one and forgotten in the other.
+    private var verdictText: (label: String, help: String) {
         switch report?.verdict {
-        case .convert: return "Re-compress"
-        case .passThrough(.bornDigital): return "Born digital"
-        case .passThrough(.alreadyProcessed): return "Already converted"
-        case .passThrough(.alreadyCompact): return "Already compact"
-        case .passThrough(.alreadySmall): return "Already small"
-        case nil: return "…"
+        case .convert:
+            ("Re-compress", "Scanned pages that will be re-compressed to compact 1-bit")
+        case .passThrough(.bornDigital):
+            ("Born digital", "Real text/vector PDF — rasterising it would only make it worse")
+        case .passThrough(.alreadyProcessed):
+            (
+                "Already converted",
+                "Produced by PaperPress — converting again would only re-encode it"
+            )
+        case .passThrough(.alreadyCompact):
+            ("Already compact", "Pages are already archival-compact (1-bit or 4-bit)")
+        case .passThrough(.alreadySmall):
+            ("Already small", "Already compact for its page count")
+        case nil:
+            ("…", "")
         }
     }
 
+    var verdictLabel: String {
+        error != nil ? "Unreadable" : verdictText.label
+    }
+
     var verdictHelp: String {
-        if let error { return error }
-        switch report?.verdict {
-        case .convert:
-            return "Scanned pages that will be re-compressed to compact 1-bit"
-        case .passThrough(.bornDigital):
-            return "Real text/vector PDF — rasterising it would only make it worse"
-        case .passThrough(.alreadyProcessed):
-            return "Produced by PaperPress — converting again would only re-encode it"
-        case .passThrough(.alreadyCompact):
-            return "Pages are already archival-compact (1-bit or 4-bit)"
-        case .passThrough(.alreadySmall):
-            return "Already compact for its page count"
-        case nil:
-            return ""
-        }
+        error ?? verdictText.help
     }
 
     var isConvert: Bool {

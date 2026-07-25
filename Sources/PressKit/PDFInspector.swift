@@ -65,7 +65,9 @@ public enum PDFInspector {
         let processedHere = producerIsPaperPress(doc)
 
         // One PageInfo per document page, unconditionally — Converter relies
-        // on positional alignment with page numbers.
+        // on positional alignment with page numbers. Already-converted
+        // files skip per-page classification: their verdict is settled and
+        // nothing downstream reads page kinds on the pass-through path.
         var pages: [PageInfo] = []
         for i in 1...doc.numberOfPages {
             guard let page = doc.page(at: i) else {
@@ -73,7 +75,10 @@ public enum PDFInspector {
                 continue
             }
             let box = page.orientedMediaBoxSize
-            let kind = classify(page: page, widthPt: box.width, heightPt: box.height)
+            let kind =
+                processedHere
+                ? PageKind.bornDigital
+                : classify(page: page, widthPt: box.width, heightPt: box.height)
             pages.append(PageInfo(kind: kind, widthPt: box.width, heightPt: box.height))
         }
 
@@ -87,7 +92,7 @@ public enum PDFInspector {
         } else if scans.isEmpty {
             verdict = .passThrough(.bornDigital)
         } else if scans.allSatisfy({
-            if case .scan(_, true) = $0.kind { return true }
+            if case let .scan(_, compact) = $0.kind { return compact }
             return false
         }) {
             verdict = .passThrough(.alreadyCompact)
@@ -131,15 +136,18 @@ public enum PDFInspector {
     }
 
     /// True when the document's Info Producer names this app — output we
-    /// wrote ourselves, already converted.
+    /// wrote ourselves, already converted. Exact or version-suffixed match
+    /// only ("PaperPress", "PaperPress 1.2"); a substring check would let
+    /// an unrelated producer name false-positive into a pass-through.
     private static func producerIsPaperPress(_ doc: CGPDFDocument) -> Bool {
         guard let info = doc.info else { return false }
         var producer: CGPDFStringRef?
         guard CGPDFDictionaryGetString(info, "Producer", &producer),
             let producer,
-            let str = CGPDFStringCopyTextString(producer)
+            let str = CGPDFStringCopyTextString(producer) as String?
         else { return false }
-        return (str as String).contains("PaperPress")
+        let marker = PDFWriter.producerMarker
+        return str == marker || str.hasPrefix(marker + " ")
     }
 
     // MARK: Page classification

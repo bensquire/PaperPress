@@ -201,6 +201,12 @@ enum Fixtures {
         return Pipeline.GrayImage(width: w, height: h, pixels: px)
     }
 
+    /// A 75 dpi tiny-print scan — the canonical "low-res text source"
+    /// that the resolution gate demotes to grayscale.
+    static func lowResTextScanPDF() -> Data {
+        scannedPDF(pages: [renderedTextPage(fontSize: 4, ink: 0.3)], dpi: 75)
+    }
+
     /// Create an empty placeholder file (with intermediate directories) —
     /// enough for FolderScanner tests, which never open the files.
     @discardableResult

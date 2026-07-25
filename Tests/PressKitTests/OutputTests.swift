@@ -22,9 +22,7 @@ final class PDFWriterTests: XCTestCase {
         XCTAssertNotNil(pdf.range(of: Data("(HELLO) Tj".utf8)))
         XCTAssertNotNil(pdf.range(of: Data("/F1".utf8)))
     }
-}
 
-final class PDFWriterProducerTests: XCTestCase {
     func test_build_stampsPaperPressProducerByDefault() throws {
         // Arrange / Act
         let page = Fixtures.textPage()
@@ -33,7 +31,9 @@ final class PDFWriterProducerTests: XCTestCase {
         )
 
         // Assert
-        XCTAssertNotNil(pdf.range(of: Data("/Producer (PaperPress)".utf8)))
+        XCTAssertNotNil(
+            pdf.range(of: Data("/Producer (\(PDFWriter.producerMarker))".utf8))
+        )
         XCTAssertNotNil(pdf.range(of: Data("/Info ".utf8)))
     }
 
@@ -42,7 +42,7 @@ final class PDFWriterProducerTests: XCTestCase {
         let pdf = Fixtures.scannedPDF(pages: [Fixtures.textPage()], dpi: 150)
 
         // Assert
-        XCTAssertNil(pdf.range(of: Data("PaperPress".utf8)))
+        XCTAssertNil(pdf.range(of: Data(PDFWriter.producerMarker.utf8)))
         XCTAssertNotNil(pdf.range(of: Data(Fixtures.foreignProducer.utf8)))
     }
 }
