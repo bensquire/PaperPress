@@ -1,34 +1,14 @@
 import PressKit
+import QuickLook
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Gentle hover feedback — macOS button styles give little or none.
-/// Inert while the control is disabled.
-struct HoverHighlight: ViewModifier {
-    var scale: CGFloat = 1.02
-    @State private var hovering = false
-    @Environment(\.isEnabled) private var isEnabled
-
-    func body(content: Content) -> some View {
-        let active = hovering && isEnabled
-        content
-            .brightness(active ? 0.07 : 0)
-            .scaleEffect(active ? scale : 1)
-            .animation(.easeOut(duration: 0.12), value: active)
-            .onHover { hovering = $0 }
-    }
-}
-
-extension View {
-    func hoverHighlight(scale: CGFloat = 1.02) -> some View {
-        modifier(HoverHighlight(scale: scale))
-    }
-}
-
-struct ContentView: View {
+public struct ContentView: View {
     @EnvironmentObject var model: AppModel
 
-    var body: some View {
+    public init() {}
+
+    public var body: some View {
         VStack(spacing: 0) {
             switch model.phase {
             case .idle:
@@ -53,6 +33,12 @@ struct ContentView: View {
             statusBar
         }
         .frame(minWidth: 640, minHeight: 460)
+        .onChange(of: model.phase) { _ in
+            // A phase change invalidates what the selection points at.
+            // (Preview state lives inside QuickLookNavigation and is
+            // discarded with each table.)
+            selectedRow = nil
+        }
     }
 
     // MARK: Centred states
@@ -168,8 +154,10 @@ struct ContentView: View {
 
     // MARK: Review table
 
+    @State private var selectedRow: FileRow.ID?
+
     private var reviewTable: some View {
-        Table(model.rows) {
+        Table(model.rows, selection: $selectedRow) {
             TableColumn("") { row in
                 Toggle(
                     "",
@@ -187,10 +175,7 @@ struct ContentView: View {
             }
             .width(24)
             TableColumn("File") { row in
-                Text(row.item.relativePath)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .help(row.item.relativePath)
+                fileCell(row)
             }
             TableColumn("Pages") { row in
                 Text(row.report.map { "\($0.pages.count)" } ?? "–")
@@ -199,9 +184,7 @@ struct ContentView: View {
             }
             .width(44)
             TableColumn("Size") { row in
-                Text(row.report.map { byteLabel($0.fileBytes) } ?? "–")
-                    .monospacedDigit()
-                    .frame(maxWidth: .infinity, alignment: .trailing)
+                byteCell(row.report?.fileBytes)
             }
             .width(70)
             TableColumn("Verdict") { row in
@@ -223,27 +206,52 @@ struct ContentView: View {
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
             handleDrop(providers, append: true)
         }
+        // Space previews the selected SOURCE file — inspect before ticking.
+        .quickLookNavigation(
+            ids: model.rows.map(\.id), urls: model.rows.map(\.item.url),
+            selection: $selectedRow
+        )
     }
 
-    private func verdictBadge(_ row: FileRow) -> some View {
-        Text(row.verdictLabel)
+    /// One capsule style for verdict and outcome badges.
+    private func capsuleBadge(
+        _ label: String, help: String, error: Bool, tint: Color?
+    ) -> some View {
+        Text(label)
             .font(.caption)
             .padding(.horizontal, 7)
             .padding(.vertical, 2)
             .background(
                 Capsule().fill(
-                    row.error != nil
+                    error
                         ? Color.red.opacity(0.15)
-                        : row.isConvert
-                            ? Color.accentColor.opacity(0.18)
-                            : Color(.quaternaryLabelColor).opacity(0.5)
+                        : tint.map { $0.opacity(0.18) }
+                            ?? Color(.quaternaryLabelColor).opacity(0.5)
                 )
             )
-            .foregroundStyle(
-                row.error != nil
-                    ? .red : row.isConvert ? Color.accentColor : Color.secondary
-            )
-            .help(row.verdictHelp)
+            .foregroundStyle(error ? Color.red : tint ?? Color.secondary)
+            .help(help)
+    }
+
+    private func fileCell(_ row: FileRow) -> some View {
+        Text(row.item.relativePath)
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .help(row.item.relativePath)
+    }
+
+    private func byteCell(_ bytes: Int?) -> some View {
+        Text(bytes.map(byteLabel) ?? "–")
+            .monospacedDigit()
+            .frame(maxWidth: .infinity, alignment: .trailing)
+    }
+
+    private func verdictBadge(_ row: FileRow) -> some View {
+        capsuleBadge(
+            row.verdictLabel, help: row.verdictHelp,
+            error: row.error != nil,
+            tint: row.isConvert ? Color.accentColor : nil
+        )
     }
 
     // MARK: Convert bar
@@ -285,32 +293,82 @@ struct ContentView: View {
     // MARK: Done state
 
     private var doneState: some View {
-        centeredState(title: "Done") {
-            Image(systemName: "checkmark.circle")
-                .font(.system(size: 64, weight: .thin))
+        VStack(spacing: 0) {
+            doneHeader
+            Divider()
+            resultsTable
+        }
+    }
+
+    private var doneHeader: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.title2)
                 .foregroundStyle(.green)
-        } detail: {
             let saved = model.totalInputBytes - model.totalOutputBytes
             Text(
                 "\(model.convertedCount) converted · "
                     + "\(byteLabel(model.totalInputBytes)) → \(byteLabel(model.totalOutputBytes))"
                     + (saved > 0 ? " · saved \(byteLabel(saved))" : "")
             )
-            .font(.callout)
             .foregroundStyle(.secondary)
             .monospacedDigit()
-            HStack(spacing: 12) {
-                Button {
-                    model.revealOutput()
-                } label: {
-                    Label("Show in Finder", systemImage: "folder")
-                }
-                .buttonStyle(.borderedProminent)
-                .hoverHighlight()
-                Button("Convert Another Folder") { model.reset() }
-                    .hoverHighlight()
+            Spacer()
+            Button {
+                model.revealOutput()
+            } label: {
+                Label("Show in Finder", systemImage: "folder")
             }
+            .buttonStyle(.borderedProminent)
+            .hoverHighlight()
+            Button("Convert Another Folder") { model.reset() }
+                .hoverHighlight()
         }
+        .padding(12)
+    }
+
+    private var resultsTable: some View {
+        // Rows and their preview URLs computed once per evaluation and
+        // shared by the table and the Quick Look navigation.
+        let rows = model.rows.filter(\.participated)
+        let previewURLs = rows.map(model.previewURL(for:))
+        return Table(rows, selection: $selectedRow) {
+            TableColumn("File") { row in
+                fileCell(row)
+            }
+            TableColumn("Before") { row in
+                byteCell(row.report?.fileBytes)
+            }
+            .width(70)
+            TableColumn("After") { row in
+                byteCell(row.result?.outputBytes)
+            }
+            .width(70)
+            TableColumn("Saved") { row in
+                Text(row.savingFraction.map { String(format: "%.0f%%", $0 * 100) } ?? "–")
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            }
+            .width(50)
+            TableColumn("Outcome") { row in
+                resultBadge(row)
+            }
+            .width(110)
+        }
+        // Space previews the selected row's OUTPUT — inspect what the
+        // conversion did.
+        .quickLookNavigation(
+            ids: rows.map(\.id), urls: previewURLs, selection: $selectedRow
+        )
+    }
+
+    private func resultBadge(_ row: FileRow) -> some View {
+        capsuleBadge(
+            row.resultText.label, help: row.resultText.help,
+            error: row.failed,
+            tint: row.result?.converted == true ? Color.green : nil
+        )
     }
 
     // MARK: Status bar

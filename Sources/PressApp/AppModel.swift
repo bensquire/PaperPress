@@ -46,10 +46,57 @@ struct FileRow: Identifiable {
     var isConvert: Bool {
         report?.verdict == .convert
     }
+
+    /// Whether this row took part in the last conversion run — the same
+    /// predicate convert(to:) uses to build its job list.
+    var participated: Bool {
+        included && report != nil
+    }
+
+    /// Conversion ran for this row and failed (vs an analysis error).
+    var failed: Bool {
+        error != nil && result == nil
+    }
+
+    /// Outcome badge + tooltip for the results view, one switch for both.
+    var resultText: (label: String, help: String) {
+        if failed, let error {
+            return ("Failed", error)
+        }
+        switch result?.outcome {
+        case let .converted(encodings):
+            var counts: [String] = []
+            let g4 = encodings.filter { $0 == .g4 }.count
+            let gray4 = encodings.filter { $0 == .gray4 }.count
+            let jpeg = encodings.filter { $0 == .jpeg }.count
+            if g4 > 0 { counts.append("1-bit ×\(g4)") }
+            if gray4 > 0 { counts.append("grayscale ×\(gray4)") }
+            if jpeg > 0 { counts.append("JPEG ×\(jpeg)") }
+            return (
+                "Converted",
+                "Pages: " + counts.joined(separator: " · ")
+            )
+        case .copied(.insufficientSaving):
+            return (
+                "Copied",
+                "Converting saved too little — original copied unchanged"
+            )
+        case .copied(.passThrough):
+            return ("Copied", "Copied through byte-identical")
+        case nil:
+            return ("—", "")
+        }
+    }
+
+    /// Fraction of the input saved by conversion, nil when not converted.
+    var savingFraction: Double? {
+        guard let result, result.converted, result.inputBytes > 0 else { return nil }
+        return 1 - Double(result.outputBytes) / Double(result.inputBytes)
+    }
 }
 
 @MainActor
-final class AppModel: ObservableObject {
+public final class AppModel: ObservableObject {
     enum Phase: Equatable {
         case idle
         case analysing(done: Int, of: Int)
@@ -79,20 +126,20 @@ final class AppModel: ObservableObject {
 
     private var worker: Task<Void, Never>?
 
-    init(initialFolder: URL? = nil) {
+    public init(initialFolder: URL? = nil) {
         if let initialFolder {
             analyse(urls: [initialFolder])
         }
     }
 
-    var busy: Bool {
+    public var busy: Bool {
         switch phase {
         case .analysing, .converting: true
         default: false
         }
     }
 
-    var canConvert: Bool {
+    public var canConvert: Bool {
         phase == .review && !includedRows.isEmpty
     }
 
@@ -140,7 +187,7 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func chooseSource() {
+    public func chooseSource() {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = true
@@ -218,7 +265,7 @@ final class AppModel: ObservableObject {
 
     // MARK: Convert
 
-    func chooseOutputAndConvert() {
+    public func chooseOutputAndConvert() {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
@@ -235,6 +282,16 @@ final class AppModel: ObservableObject {
             return
         }
         convert(to: out)
+    }
+
+    /// True when any included file's planned output path IS its source
+    /// (covers both "output = dropped folder" and "output = a loose
+    /// file's own folder"); the Converter guard remains the invariant.
+    func outputCollides(with out: URL) -> Bool {
+        includedRows.contains { row in
+            out.appendingPathComponent(row.item.relativePath).standardizedFileURL
+                == row.item.url.standardizedFileURL
+        }
     }
 
     func convert(to out: URL) {
@@ -316,6 +373,17 @@ final class AppModel: ObservableObject {
         for i in rows.indices where rows[i].error == nil {
             rows[i].included = included
         }
+    }
+
+    /// The file to preview for a results row: the written output when the
+    /// conversion produced one (the point is to inspect quality), else
+    /// the source (e.g. for failed rows). Routed by recorded results, not
+    /// filesystem checks — no stat() in view bodies.
+    func previewURL(for row: FileRow) -> URL {
+        if row.result != nil, let outputURL {
+            return outputURL.appendingPathComponent(row.item.relativePath)
+        }
+        return row.item.url
     }
 
     func revealOutput() {

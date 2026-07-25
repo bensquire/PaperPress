@@ -6,13 +6,19 @@ let package = Package(
     platforms: [.macOS(.v13)],
     targets: [
         .target(name: "PressKit", path: "Sources/PressKit"),
+        // App layer as a library so the model is testable; the executable
+        // is just the @main scene declaration.
+        .target(
+            name: "PressApp", dependencies: ["PressKit"],
+            path: "Sources/PressApp"
+        ),
         .executableTarget(
-            name: "PaperPress", dependencies: ["PressKit"],
+            name: "PaperPress", dependencies: ["PressApp"],
             path: "Sources/PaperPress"
         ),
         .testTarget(
-            name: "PressKitTests", dependencies: ["PressKit"],
-            path: "Tests/PressKitTests"
+            name: "PaperPressTests", dependencies: ["PressKit", "PressApp"],
+            path: "Tests/PaperPressTests"
         ),
     ]
 )

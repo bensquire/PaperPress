@@ -24,7 +24,7 @@ final class ConverterTests: FixtureTestCase {
         // Assert
         XCTAssertTrue(result.converted)
         XCTAssertLessThan(result.outputBytes, result.inputBytes / 2)
-        XCTAssertEqual(result.pageKinds, [.text])
+        XCTAssertEqual(result.outcome, .converted([.g4]))
         let written = try Data(contentsOf: out)
         XCTAssertNotNil(
             written.range(of: Data("CCITTFaxDecode".utf8)),
@@ -47,7 +47,7 @@ final class ConverterTests: FixtureTestCase {
         let result = try Converter.convert(report: report, to: out, settings: settings)
 
         // Assert
-        XCTAssertEqual(result.pageKinds, [.photo])
+        XCTAssertEqual(result.outcome, .converted([.jpeg]))
         let written = try Data(contentsOf: out)
         XCTAssertNotNil(
             written.range(of: Data("DCTDecode".utf8)),
@@ -67,7 +67,7 @@ final class ConverterTests: FixtureTestCase {
         let result = try Converter.convert(report: report, to: out, settings: noOCR)
 
         // Assert
-        XCTAssertFalse(result.converted)
+        XCTAssertEqual(result.outcome, .copied(.passThrough))
         XCTAssertEqual(try Data(contentsOf: out), data)
     }
 
@@ -88,7 +88,7 @@ final class ConverterTests: FixtureTestCase {
         let result = try Converter.convert(report: report, to: out, settings: settings)
 
         // Assert
-        XCTAssertFalse(result.converted)
+        XCTAssertEqual(result.outcome, .copied(.insufficientSaving))
         XCTAssertEqual(try Data(contentsOf: out), srcData)
     }
 
@@ -148,7 +148,7 @@ final class ConverterTests: FixtureTestCase {
         )
 
         // Assert — demoted, and encoded as 4-bit Flate, not JPEG
-        XCTAssertEqual(result.pageKinds, [.photo])
+        XCTAssertEqual(result.outcome, .converted([.gray4]))
         let written = try Data(contentsOf: out)
         XCTAssertNotNil(written.range(of: Data("/BitsPerComponent 4".utf8)))
         XCTAssertNil(written.range(of: Data("DCTDecode".utf8)))
@@ -172,7 +172,7 @@ final class ConverterTests: FixtureTestCase {
         let result = try Converter.convert(report: report, to: out, settings: settings)
 
         // Assert
-        XCTAssertEqual(result.pageKinds, [.photo])
+        XCTAssertEqual(result.outcome, .converted([.gray4]))
         XCTAssertNil(
             try Data(contentsOf: out).range(of: Data("CCITTFaxDecode".utf8))
         )
@@ -216,7 +216,7 @@ final class ConverterTests: FixtureTestCase {
         let result = try Converter.convert(report: report, to: out, settings: settings)
 
         // Assert — demoted by damage, not resolution, and grayscale
-        XCTAssertEqual(result.pageKinds, [.photo])
+        XCTAssertEqual(result.outcome, .converted([.gray4]))
         let written = try Data(contentsOf: out)
         XCTAssertNil(written.range(of: Data("CCITTFaxDecode".utf8)))
         XCTAssertNotNil(written.range(of: Data("/BitsPerComponent 4".utf8)))
@@ -239,7 +239,7 @@ final class ConverterTests: FixtureTestCase {
         let result = try Converter.convert(report: report, to: out, settings: settings)
 
         // Assert — one G4 page, one JPEG page, in order
-        XCTAssertEqual(result.pageKinds, [.text, .photo])
+        XCTAssertEqual(result.outcome, .converted([.g4, .jpeg]))
         let written = try Data(contentsOf: out)
         XCTAssertNotNil(written.range(of: Data("CCITTFaxDecode".utf8)))
         XCTAssertNotNil(written.range(of: Data("DCTDecode".utf8)))

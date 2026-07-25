@@ -6,8 +6,8 @@ import AppKit
 /// has built the model, so early deliveries are buffered and flushed
 /// when the model attaches.
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
-    var model: AppModel? {
+public final class AppDelegate: NSObject, NSApplicationDelegate {
+    public var model: AppModel? {
         didSet {
             let queued = pending
             pending = []
@@ -16,11 +16,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     private var pending: [URL] = []
 
-    func applicationDidFinishLaunching(_ notification: Notification) {
+    public func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.servicesProvider = self
     }
 
-    func application(_ application: NSApplication, open urls: [URL]) {
+    public func application(_ application: NSApplication, open urls: [URL]) {
         deliver(urls)
     }
 

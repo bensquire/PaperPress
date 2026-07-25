@@ -55,14 +55,36 @@ public enum Converter {
     /// OCR dominates per-page wall clock.
     static let ocrDpi = 150
 
+    /// How one page of a converted file was encoded.
+    public enum PageEncoding: Equatable, Sendable {
+        case g4
+        case gray4
+        case jpeg
+    }
+
+    /// Why an original was copied through instead of converted.
+    public enum CopyReason: Equatable, Sendable {
+        /// The analysis verdict was pass-through (born digital, already
+        /// converted/compact/small).
+        case passThrough
+        /// Conversion ran but didn't clear the minimum-saving bar.
+        case insufficientSaving
+    }
+
+    public enum Outcome: Equatable, Sendable {
+        case converted([PageEncoding])
+        case copied(CopyReason)
+    }
+
     public struct FileResult {
         public let inputBytes: Int
         public let outputBytes: Int
-        /// False = original copied through (pass-through verdict or the
-        /// conversion didn't save enough).
-        public let converted: Bool
-        /// Per converted page: how it was encoded.
-        public let pageKinds: [PageClassifier.Kind]
+        public let outcome: Outcome
+
+        public var converted: Bool {
+            if case .converted = outcome { return true }
+            return false
+        }
     }
 
     /// Convert (or pass through) `report.url`, writing the result to `outURL`.
@@ -75,14 +97,13 @@ public enum Converter {
             throw PressError.wouldOverwrite(outURL.lastPathComponent)
         }
         if case .passThrough = report.verdict {
-            return try passThrough(report, to: outURL, kinds: [])
+            return try copyResult(report, to: outURL, reason: .passThrough)
         }
 
         guard let doc = CGPDFDocument(report.url as CFURL) else {
             throw PressError.scanFailed("Cannot open PDF \(report.url.lastPathComponent)")
         }
         var pages: [PDFWriter.Page] = []
-        var kinds: [PageClassifier.Kind] = []
         // Text pages render at the cap even when the source is lower-res:
         // a low-dpi grayscale scan carries sub-pixel detail in its
         // antialiasing, and thresholding at native resolution destroys it
@@ -152,7 +173,6 @@ public enum Converter {
                 content = .g4(g4Stream)
                 ocrSource = gray
                 dpi = textDpi
-                kinds.append(.text)
             } else {
                 dpi = max(72, min(nativeDpi, settings.photoDpiCap))
                 let gray: Pipeline.GrayImage
@@ -170,7 +190,6 @@ public enum Converter {
                     ? .gray4Flate(Gray4.encode(gray))
                     : jpegContent(gray, quality: settings.jpegQuality, dpi: dpi)
                 ocrSource = gray
-                kinds.append(.photo)
             }
             // OCR reads the grayscale, downsampled to ocrDpi — better for
             // Vision than 1-bit input, and much faster. Word boxes are
@@ -187,15 +206,25 @@ public enum Converter {
         let goodEnough =
             Double(data.count) <= Double(report.fileBytes) * (1 - settings.minSavingFraction)
         guard goodEnough else {
-            return try passThrough(report, to: outURL, kinds: kinds)
+            return try copyResult(report, to: outURL, reason: .insufficientSaving)
         }
         try ensureParent(of: outURL)
         try data.write(to: outURL, options: .atomic)
         copySourceDates(from: report.url, to: outURL)
         return FileResult(
             inputBytes: report.fileBytes, outputBytes: data.count,
-            converted: true, pageKinds: kinds
+            outcome: .converted(pages.map { encoding(of: $0.content) })
         )
+    }
+
+    /// The encoding is a fact of the page content — derived, not tracked
+    /// in parallel, so a new branch can't forget to record it.
+    private static func encoding(of content: PDFWriter.Content) -> PageEncoding {
+        switch content {
+        case .g4: .g4
+        case .gray4Flate: .gray4
+        case .jpegGray: .jpeg
+        }
     }
 
     /// Downsample OCR input to ocrDpi when the render exceeds it.
@@ -240,14 +269,13 @@ public enum Converter {
         return try G4.extractStream(fromTIFF: G4.tiff(from: packed))
     }
 
-    private static func passThrough(
-        _ report: PDFInspector.Report, to outURL: URL,
-        kinds: [PageClassifier.Kind]
+    private static func copyResult(
+        _ report: PDFInspector.Report, to outURL: URL, reason: CopyReason
     ) throws -> FileResult {
         try copyThrough(report.url, to: outURL)
         return FileResult(
             inputBytes: report.fileBytes, outputBytes: report.fileBytes,
-            converted: false, pageKinds: kinds
+            outcome: .copied(reason)
         )
     }
 

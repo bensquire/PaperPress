@@ -35,7 +35,7 @@ class FixtureTestCase: XCTestCase {
 enum Fixtures {
     static func tempDir() -> URL {
         let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("PressKitTests-\(UUID().uuidString)")
+            .appendingPathComponent("PaperPressTests-\(UUID().uuidString)")
         try! FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
     }
@@ -160,6 +160,7 @@ enum Fixtures {
 
     @discardableResult
     static func write(_ data: Data, to dir: URL, name: String) -> URL {
+        try! FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let url = dir.appendingPathComponent(name)
         try! data.write(to: url)
         return url

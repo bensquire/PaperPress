@@ -62,7 +62,9 @@ compact PDFs at scan time.
 - **Searchable** — a fresh invisible text layer via Apple's Vision OCR
   on every converted page. No cloud, no external tools.
 - **See it before and after** — analyse is instant and read-only;
-  convert shows a live count and finishes with the space saved:
+  convert shows a live count and finishes with per-file results.
+  Press space to Quick Look any file — sources on the review list,
+  converted outputs on the results — and arrow through the batch:
 
   <p align="center">
   <img src="images/hero-ready.png" alt="Drop screen" width="46%"/>
@@ -127,8 +129,9 @@ Sources/PressKit/      # engine: inspection, classification, compression
   Pipeline.swift       #   Otsu, cleanup, 1-bit packing (from PaperDrop)
   PDFWriter.swift      #   hand-rolled PDF: G4 + DCT + Flate + OCR layer
   G4.swift, OCR.swift  #   G4 stream extraction, Vision OCR
-Sources/PaperPress/    # SwiftUI app: analyse → review → convert
-Tests/PressKitTests/   # unit tests with programmatic PDF fixtures
+Sources/PressApp/      # SwiftUI app: analyse → review → convert
+Sources/PaperPress/    # @main entry point
+Tests/PaperPressTests/ # unit tests with programmatic PDF fixtures
 icon/                  # programmatic icon generator
 scripts/               # DMG packaging
 ```
