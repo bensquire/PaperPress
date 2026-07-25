@@ -11,6 +11,9 @@ rm -f "$DMG"
 STAGE=$(mktemp -d)
 cp -R "$APP" "$STAGE/"
 ln -s /Applications "$STAGE/Applications"
-hdiutil create -volname PaperPress -srcfolder "$STAGE" -format UDZO -quiet "$DMG"
+# Explicit max zlib level: hdiutil defaults vary by macOS version
+# (the v0.1.0 CI runner effectively shipped half the image uncompressed).
+hdiutil create -volname PaperPress -srcfolder "$STAGE" -format UDZO \
+    -imagekey zlib-level=9 -quiet "$DMG"
 rm -rf "$STAGE"
 echo "built $DMG"
