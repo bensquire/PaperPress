@@ -18,51 +18,10 @@ mkdir -p $APP/Contents/MacOS $APP/Contents/Resources
 cp .build/release/PaperPress $APP/Contents/MacOS/
 strip -rSTx $APP/Contents/MacOS/PaperPress
 cp icon/PaperPress.icns $APP/Contents/Resources/
-cat > $APP/Contents/Info.plist <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-  <key>CFBundleName</key><string>PaperPress</string>
-  <key>CFBundleIdentifier</key><string>com.bensquire.paperpress</string>
-  <key>CFBundleExecutable</key><string>PaperPress</string>
-  <key>CFBundleIconFile</key><string>PaperPress</string>
-  <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>${VERSION}</string>
-  <key>LSMinimumSystemVersion</key><string>13.0</string>
-  <key>NSHighResolutionCapable</key><true/>
-  <key>CFBundleDocumentTypes</key>
-  <array>
-    <dict>
-      <key>CFBundleTypeName</key><string>PDF Document</string>
-      <key>CFBundleTypeRole</key><string>Viewer</string>
-      <key>LSHandlerRank</key><string>Alternate</string>
-      <key>LSItemContentTypes</key>
-      <array><string>com.adobe.pdf</string></array>
-    </dict>
-    <dict>
-      <key>CFBundleTypeName</key><string>Folder</string>
-      <key>CFBundleTypeRole</key><string>Viewer</string>
-      <key>LSHandlerRank</key><string>None</string>
-      <key>LSItemContentTypes</key>
-      <array><string>public.folder</string></array>
-    </dict>
-  </array>
-  <key>NSServices</key>
-  <array>
-    <dict>
-      <key>NSMenuItem</key>
-      <dict><key>default</key><string>Analyse with PaperPress</string></dict>
-      <key>NSMessage</key><string>analyseWithPaperPress</string>
-      <key>NSPortName</key><string>PaperPress</string>
-      <key>NSSendFileTypes</key>
-      <array>
-        <string>com.adobe.pdf</string>
-        <string>public.folder</string>
-      </array>
-    </dict>
-  </array>
-</dict></plist>
-EOF
+# Info.plist lives as a real file (editor tooling, lintable) with the
+# version templated in.
+sed "s/@VERSION@/${VERSION}/" scripts/Info.plist.template \
+    > $APP/Contents/Info.plist
+plutil -lint -s $APP/Contents/Info.plist
 codesign --force --options runtime --timestamp --sign "$IDENTITY" $APP
 echo "built and signed $PWD/$APP (v$VERSION)"

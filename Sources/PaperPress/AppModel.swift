@@ -148,7 +148,15 @@ final class AppModel: ObservableObject {
         panel.allowsMultipleSelection = true
         panel.message = "Choose scanned PDFs, or folders of them"
         guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
-        analyse(urls: panel.urls, append: phase == .review)
+        open(urls: panel.urls)
+    }
+
+    /// Entry point for externally arriving files (Open With, Dock drops,
+    /// Services, the open panel): joins the current review if one is
+    /// showing, else starts fresh. Drop targets in the UI don't use this —
+    /// their append/replace semantics come from which zone was dropped on.
+    func open(urls: [URL]) {
+        analyse(urls: urls, append: phase == .review)
     }
 
     /// Expand the given PDFs/folders and inspect them. With append=true

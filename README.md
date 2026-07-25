@@ -71,6 +71,10 @@ compact PDFs at scan time.
 - **Scan edges cleaned** — the black bands a scanner lid or skewed
   feed leaves along page edges are whitened (only when they hug the
   border — content that reaches the edge is kept; toggleable).
+- **A proper Finder citizen** — right-click → Open With → PaperPress on
+  PDFs or folders (Preview stays your default), drop them on the Dock
+  icon, or use "Analyse with PaperPress" in the Services menu; files
+  arriving while a review is open join the current batch.
 - **Never destructive** — output goes to a separate folder mirroring
   the source tree; pass-through files are copied byte-identical and
   file dates are preserved. If a conversion wouldn't save at least 20%

@@ -8,7 +8,11 @@ import AppKit
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     var model: AppModel? {
-        didSet { flushPending() }
+        didSet {
+            let queued = pending
+            pending = []
+            deliver(queued)
+        }
     }
     private var pending: [URL] = []
 
@@ -25,24 +29,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         _ pasteboard: NSPasteboard, userData: String?,
         error: AutoreleasingUnsafeMutablePointer<NSString>
     ) {
-        let urls =
-            pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL] ?? []
-        deliver(urls)
-        NSApp.activate(ignoringOtherApps: true)
+        deliver(pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL] ?? [])
     }
 
     private func deliver(_ urls: [URL]) {
         guard !urls.isEmpty else { return }
-        if let model {
-            model.analyse(urls: urls, append: model.phase == .review)
-        } else {
+        guard let model else {
             pending += urls
+            return
         }
-    }
-
-    private func flushPending() {
-        guard let model, !pending.isEmpty else { return }
-        model.analyse(urls: pending, append: model.phase == .review)
-        pending = []
+        model.open(urls: urls)
+        // Open With/Dock activate the app themselves; Services invocations
+        // don't — activating here covers every entry uniformly.
+        NSApp.activate(ignoringOtherApps: true)
     }
 }
