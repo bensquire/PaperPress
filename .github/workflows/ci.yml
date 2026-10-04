@@ -7,28 +7,48 @@ on:
   push:
     branches: [main]
     tags-ignore: ["v*"]
+    paths-ignore: ["**.md", "images/**", "LICENSE", ".gitignore"]
   pull_request:
+    # ready_for_review: drafts are skipped below, so run when one is ready.
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths-ignore: ["**.md", "images/**", "LICENSE", ".gitignore"]
   workflow_dispatch:
+
+# One run per branch or PR: a newer push cancels the run it supersedes,
+# so a burst of pushes costs one run, not one each.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
   ci:
     name: Lint, test, smoke build
-    runs-on: macos-15
-    timeout-minutes: 25
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: macos-26
+    # A clean run is ~3 minutes; the caps stop a hung step burning more.
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: maxim-lobanov/setup-xcode@v1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          xcode-version: latest-stable
+          persist-credentials: false
+
+      - uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1.7.0
+        with:
+          xcode-version: "26"
 
       - name: Lint
+        timeout-minutes: 3
         run: make lint
 
       - name: Test
+        timeout-minutes: 8
         run: make test
 
       - name: Smoke bundle (ad-hoc signed)
+        timeout-minutes: 5
         env:
           CODESIGN_IDENTITY: "-"
         run: |

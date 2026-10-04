@@ -23,19 +23,27 @@ on:
 permissions:
   contents: write
 
+# One release run per tag at a time. Queued, not cancelled: cancelling
+# mid-notarisation or mid-publish would leave a half-made release.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   release:
     name: Build, sign, notarize, publish
-    runs-on: macos-15
-    timeout-minutes: 45
+    runs-on: macos-26
+    # Build and test take ~3 minutes; the two notarisations dominate.
+    timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
-      - uses: maxim-lobanov/setup-xcode@v1
+      - uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1.7.0
         with:
-          xcode-version: latest-stable
+          xcode-version: "26"
 
       - name: Resolve version
         id: ver
@@ -53,6 +61,7 @@ jobs:
           echo "prerelease=$IS_PRERELEASE"        >> "$GITHUB_OUTPUT"
 
       - name: Lint and test
+        timeout-minutes: 10
         run: |
           make lint
           make test
@@ -80,6 +89,7 @@ jobs:
           echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
 
       - name: Build signed app
+        timeout-minutes: 5
         env:
           VERSION: ${{ steps.ver.outputs.numeric_version }}
           CODESIGN_IDENTITY: "Developer ID Application"
@@ -94,6 +104,7 @@ jobs:
           echo "APPLE_API_KEY_PATH=$KEY_PATH" >> "$GITHUB_ENV"
 
       - name: Notarize and staple .app
+        timeout-minutes: 12
         env:
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
@@ -106,6 +117,7 @@ jobs:
           xcrun stapler staple "$APP"
 
       - name: Build, sign, notarize DMG
+        timeout-minutes: 12
         env:
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
@@ -145,6 +157,7 @@ jobs:
           } > release_notes.md
 
       - name: Publish GitHub Release
+        timeout-minutes: 3
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -157,7 +170,7 @@ jobs:
             $PRERELEASE_FLAG
 
       - name: Upload artifact (for manual inspection)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: PaperPress-${{ steps.ver.outputs.version }}-dmg
           path: dist/PaperPress-${{ steps.ver.outputs.version }}.dmg
