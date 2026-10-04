@@ -9,8 +9,8 @@ final class Gray4Tests: FixtureTestCase {
     private func assertGray4RoundTrips(
         _ page: Pipeline.GrayImage, file: StaticString = #filePath, line: UInt = #line
     ) throws {
-        let pdf = PDFWriter.build(
-            pages: [PDFWriter.Page(content: .gray4Flate(Gray4.encode(page)), dpi: 150)]
+        let pdf = try PDFWriter.build(
+            pages: [PDFWriter.Page(content: .gray4Flate(try Gray4.encode(page)), dpi: 150)]
         )
         let url = Fixtures.write(pdf, to: dir, name: "roundtrip.pdf")
         let doc = try XCTUnwrap(CGPDFDocument(url as CFURL), file: file, line: line)

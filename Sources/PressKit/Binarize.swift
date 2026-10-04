@@ -12,7 +12,7 @@ public enum Binarize {
     /// Sauvola dynamic-range constant (half the gray range).
     static let dynamicRange = 128.0
     /// Minimum ink-paper contrast for class statistics to mean anything
-    /// (shared by damage() and EdgeClean).
+    /// (see levels()).
     static let minContrast = 20.0
     /// damage(): a block counts as content when its mean is at least this
     /// far (× contrast) below paper…
@@ -33,6 +33,17 @@ public enum Binarize {
     /// near-empty tiles don't divide by a vanishing denominator. Distinct
     /// from contentContrastGate despite the coincidental value.
     static let minTileContrastFraction = 0.3
+
+    /// A page's ink and paper levels.
+    public typealias Levels = (ink: Double, paper: Double)
+
+    /// The page's ink and paper levels, when they're far enough apart to mean
+    /// anything. Taken once a page and handed to sauvola, damage and
+    /// levelled(), which all judge the same render by them.
+    static func levels(_ g: Pipeline.GrayImage) -> Levels? {
+        guard let means = classMeans(g), means.paper - means.ink > minContrast else { return nil }
+        return means
+    }
 
     /// Ink and paper class means at the Otsu split, derived from the
     /// histogram in O(256) — the same quantities Otsu's search computes
@@ -76,15 +87,15 @@ public enum Binarize {
     /// strokes still diverge. The page score is the worst tile with
     /// enough content.
     public static func damage(
-        _ g: Pipeline.GrayImage, _ bw: Pipeline.BinaryImage, block: Int = 4
+        _ g: Pipeline.GrayImage, _ bw: Pipeline.BinaryImage, block: Int = 4,
+        levels known: Levels? = nil
     ) -> Double {
         let w = g.width, h = g.height
         let sw = w / block, sh = h / block
         guard sw > 0, sh > 0 else { return 0 }
 
-        guard let (inkLevel, paperLevel) = classMeans(g) else { return 0 }
+        guard let (inkLevel, paperLevel) = known ?? levels(g) else { return 0 }
         let contrast = paperLevel - inkLevel
-        guard contrast > minContrast else { return 0 }
 
         let tw = (sw + tileBlocks - 1) / tileBlocks
         let th = (sh + tileBlocks - 1) / tileBlocks
@@ -176,18 +187,86 @@ public enum Binarize {
     /// pass, so the recompute is cheap.
     static let sauvolaBandRows = 128
 
+    /// Where print counts as dark enough to keep its true weight, as a
+    /// fraction of the page's ink-to-paper contrast: the stroke cap (see
+    /// sauvola) fades in from `strokeCapFrom` to full strength
+    /// `strokeCapRamp` above it.
+    static let strokeCapFrom = 0.4
+    static let strokeCapRamp = 0.3
+    /// The least ink a window needs (as a fraction of it) for its midpoint
+    /// estimate to count; below it the cap fades out. A line of text holds
+    /// 10–20%; a lone dot, under 2%.
+    static let strokeCapMinCoverage = 0.05
+
+    /// Sauvola's window: about a sixth of an inch, so behaviour holds across
+    /// resolutions.
+    static func window(dpi: Int) -> Int {
+        max(25, dpi / 6) | 1
+    }
+
+    /// The stroke cap's page-wide terms, worked out once a page.
+    struct StrokeCap {
+        let paper: Double
+        let contrast: Double
+        let darknessScale: Double
+        let darknessOffset: Double
+
+        init(_ levels: Levels) {
+            paper = levels.paper
+            contrast = levels.paper - levels.ink
+            darknessScale = 1 / (contrast * strokeCapRamp)
+            darknessOffset = strokeCapFrom / strokeCapRamp
+        }
+    }
+
+    /// One pixel's threshold from its window's mean and variance: Sauvola's,
+    /// capped at the local ink-to-paper midpoint where the print is dark (see
+    /// sauvola). Shared with the brute-force reference test.
+    @inline(__always)
+    static func threshold(mean: Double, variance: Double, k: Double, cap: StrokeCap?) -> Double {
+        let t = mean * (1 + k * (variance.squareRoot() / dynamicRange - 1))
+        guard let cap else { return t }
+        let toPaper = cap.paper - mean
+        guard toPaper > 1 else { return t }
+        // Never more than the page's own ink-to-paper distance: past it the
+        // estimate is the formula's singularity, not ink. Uncapped, it erased
+        // a lone 6 px dot on paper 1.4–2.1 levels brighter than the page's.
+        let d = min(variance / toPaper + toPaper, cap.contrast)
+        let midpoint = cap.paper - d / 2
+        guard midpoint < t else { return t }
+        // Full strength for dark print; none for faint print, which keeps
+        // Sauvola's rescue; none where too little ink to estimate from.
+        let darkness = d * cap.darknessScale - cap.darknessOffset
+        let coverage = toPaper / (d * strokeCapMinCoverage)
+        let strength = min(1, max(0, min(darkness, coverage)))
+        return t + strength * (midpoint - t)
+    }
+
     /// Adaptive threshold. `k` controls strictness (higher = less ink);
     /// the literature uses 0.2–0.5, but faded print sits barely below its
     /// local mean, so PaperPress runs gentler (0.15) — measured on real
     /// faded certificates, and still white on paper grain and typical
     /// bleed-through. The window scales with dpi (~1/6 inch) so behaviour
     /// is resolution-stable.
+    ///
+    /// That gentleness costs dark print its weight: in a line of text the
+    /// local mean sits near paper, so the gray fringe around every stroke
+    /// lands on the ink side. The weight-true cut is the midpoint between the
+    /// local ink and paper, which mean and spread give away once the paper
+    /// level is known: for a window with ink coverage p, mean m = q − p·d and
+    /// variance s² = p(1−p)·d², so the ink-to-paper distance is
+    /// d = s²/(q−m) + (q−m). The threshold is capped at that midpoint for dark
+    /// print, fading out for faint print, which keeps Sauvola's rescue.
+    /// Measured on a 150 dpi letter: ink came out 10–13% heavier than the scan
+    /// (1.10–1.13×), and 0.97–0.98× capped, with the damage score falling
+    /// (0.167 → 0.115 on its densest page) and size unchanged; under a full
+    /// cap its faint date stamp lost strokes, hence the fade.
     public static func sauvola(
-        _ g: Pipeline.GrayImage, dpi: Int, k: Double = 0.15
+        _ g: Pipeline.GrayImage, dpi: Int, k: Double = 0.15, levels known: Levels? = nil
     ) -> Pipeline.BinaryImage {
         let w = g.width, h = g.height
-        let window = max(25, dpi / 6) | 1
-        let r = window / 2
+        let cap = (known ?? levels(g)).map(StrokeCap.init)
+        let r = window(dpi: dpi) / 2
 
         var ink = [Bool](repeating: false, count: w * h)
         let stride = w + 1
@@ -242,11 +321,9 @@ public enum Binarize {
                                             &- sqBuf[a + x1] &- sqBuf[b + x0])
                                     let mean = s1 / n
                                     let variance = max(0, s2 / n - mean * mean)
-                                    let t =
-                                        mean
-                                        * (1 + k
-                                            * (variance.squareRoot() / dynamicRange - 1))
-                                    out[rowBase + x] = Double(pix[rowBase + x]) < t
+                                    out[rowBase + x] =
+                                        Double(pix[rowBase + x])
+                                        < threshold(mean: mean, variance: variance, k: k, cap: cap)
                                 }
                             }
                             bandStart = bandEnd

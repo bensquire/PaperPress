@@ -24,6 +24,24 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         deliver(urls)
     }
 
+    public func applicationWillTerminate(_ notification: Notification) {
+        model?.automation.shutdown()
+    }
+
+    /// Quitting with batches unfinished asks first. Files already written are
+    /// complete (each is written atomically); the rest would silently go
+    /// unconverted, and the queue doesn't outlive the app.
+    public func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let model, model.hasUnfinishedJobs else { return .terminateNow }
+        let alert = NSAlert()
+        alert.messageText = "Quit with batches unfinished?"
+        alert.informativeText =
+            "Files already written are complete. Batches still converting, waiting or awaiting approval won't be converted."
+        alert.addButton(withTitle: "Keep Converting")
+        alert.addButton(withTitle: "Quit")
+        return alert.runModal() == .alertSecondButtonReturn ? .terminateNow : .terminateCancel
+    }
+
     @objc(analyseWithPaperPress:userData:error:)
     func analyseWithPaperPress(
         _ pasteboard: NSPasteboard, userData: String?,
@@ -40,7 +58,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         model.open(urls: urls)
         // Open With/Dock activate the app themselves; Services invocations
-        // don't — activating here covers every entry uniformly.
-        NSApp.activate(ignoringOtherApps: true)
+        // don't — activating here covers every entry uniformly. A request,
+        // not a command, under cooperative activation
+        // (/documentation/appkit/nsapplication/activate()).
+        NSApp.activate()
     }
 }

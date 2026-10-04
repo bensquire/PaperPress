@@ -2,14 +2,24 @@ import CoreGraphics
 import Foundation
 
 extension CGPDFPage {
-    /// MediaBox size with the page's rotation applied — the size the page
-    /// actually displays at. Inspector dpi maths and render dimensions must
-    /// agree, so both go through this.
-    public var orientedMediaBoxSize: CGSize {
-        let box = getBoxRect(.mediaBox)
-        return rotationAngle % 180 == 0
-            ? CGSize(width: box.width, height: box.height)
-            : CGSize(width: box.height, height: box.width)
+    /// A box's size with the page's rotation applied.
+    public func orientedSize(of box: CGPDFBox) -> CGSize {
+        oriented(getBoxRect(box).size)
+    }
+
+    /// The part of the page a viewer shows — the crop box clipped to the
+    /// media box, rotation applied. Renders and copied pages use this, so
+    /// content outside a crop stays hidden: "When the page is displayed
+    /// or printed, its contents are to be clipped to this rectangle"
+    /// (/documentation/coregraphics/cgpdfbox/cropbox).
+    public var visibleSize: CGSize {
+        let media = getBoxRect(.mediaBox)
+        let visible = getBoxRect(.cropBox).intersection(media)
+        return oriented(visible.isEmpty ? media.size : visible.size)
+    }
+
+    private func oriented(_ size: CGSize) -> CGSize {
+        rotationAngle % 180 == 0 ? size : CGSize(width: size.height, height: size.width)
     }
 }
 
@@ -19,7 +29,7 @@ extension Pipeline.GrayImage {
     public func resampled(scale: Double) -> Pipeline.GrayImage {
         let nw = max(1, Int((Double(width) * scale).rounded()))
         let nh = max(1, Int((Double(height) * scale).rounded()))
-        guard let img = cgImage else { return self }
+        guard nw != width || nh != height, let img = cgImage else { return self }
         var out = [UInt8](repeating: 255, count: nw * nh)
         out.withUnsafeMutableBytes { buf in
             guard
@@ -40,7 +50,7 @@ extension Pipeline.GrayImage {
 /// Rasterises a PDF page to 8-bit grayscale for the compression pipeline.
 public enum PDFRender {
     public static func gray(page: CGPDFPage, dpi: Int) throws -> Pipeline.GrayImage {
-        let box = page.orientedMediaBoxSize
+        let box = page.visibleSize
         let scale = Double(dpi) / 72
         let w = max(1, Int((box.width * scale).rounded()))
         let h = max(1, Int((box.height * scale).rounded()))
@@ -59,13 +69,15 @@ public enum PDFRender {
             ctx.setFillColor(gray: 1, alpha: 1)
             ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
             ctx.interpolationQuality = .high
-            // getDrawingTransform never scales UP, so ask it only to handle
-            // rotation/origin at natural (point) size and apply the dpi
-            // scale ourselves.
+            // getDrawingTransform is asked only for rotation and origin, at
+            // natural (point) size, and the dpi scale is applied here:
+            // observed not to scale up (PDFRenderTests), which its page
+            // doesn't promise either way. It clips the crop box to the
+            // media box itself, matching visibleSize.
             ctx.concatenate(CGAffineTransform(scaleX: scale, y: scale))
             ctx.concatenate(
                 page.getDrawingTransform(
-                    .mediaBox, rect: CGRect(x: 0, y: 0, width: box.width, height: box.height),
+                    .cropBox, rect: CGRect(x: 0, y: 0, width: box.width, height: box.height),
                     rotate: 0, preserveAspectRatio: true
                 )
             )

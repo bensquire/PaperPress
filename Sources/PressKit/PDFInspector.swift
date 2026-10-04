@@ -6,7 +6,7 @@ import Foundation
 /// resolution), which are born-digital, and whether the file is already
 /// compact.
 public enum PDFInspector {
-    public enum PageKind: Equatable {
+    public enum PageKind: Equatable, Sendable {
         /// Page dominated by one full-page raster image.
         /// `dpi` is the image's implied resolution; `compact` means the
         /// image is already archival-compact (1-bit CCITT/JBIG2, or
@@ -16,18 +16,20 @@ public enum PDFInspector {
         case bornDigital
     }
 
-    public struct PageInfo: Equatable {
+    public struct PageInfo: Equatable, Sendable {
         public let kind: PageKind
+        /// Displayed size in points (crop box, rotation applied) — the
+        /// size the converted page comes out at.
         public let widthPt: Double
         public let heightPt: Double
     }
 
-    public enum Verdict: Equatable {
+    public enum Verdict: Equatable, Sendable, Codable {
         case convert
         case passThrough(PassReason)
     }
 
-    public enum PassReason: Equatable {
+    public enum PassReason: Equatable, Sendable, Codable {
         case bornDigital
         /// Carries this app's Producer marker — converting again would
         /// only re-encode it.
@@ -36,12 +38,13 @@ public enum PDFInspector {
         case alreadySmall
     }
 
-    public struct Report {
+    public struct Report: Sendable {
         public let url: URL
         public let fileBytes: Int
         public let pages: [PageInfo]
         public let verdict: Verdict
-        /// Rough size after conversion (heuristic; refined during convert).
+        /// Rough size after conversion (heuristic, from the page sizes and
+        /// resolutions; the converter reports the real figure).
         public let estimatedBytes: Int
     }
 
@@ -52,6 +55,32 @@ public enum PDFInspector {
     /// a text A4 at 300 dpi (8.7 Mpx). Drives the review-table estimate.
     static let estimatedBytesPerPixel = 0.0023
 
+    /// Inspects many files at once — parsing, a few milliseconds a file — and
+    /// hands each result to `each` as it lands, in the caller's isolation (the
+    /// window's model applies them on the main actor; the helper collects
+    /// them). The one analysis loop the window, the queue and the helper share.
+    nonisolated(nonsending) public static func inspectAll(
+        _ urls: [URL], each: (Int, Result<Report, any Error>) async -> Void
+    ) async {
+        typealias Inspected = (Int, Result<Report, any Error>)
+        await withTaskGroup(of: Inspected.self) { group in
+            var next = 0
+            func add(into group: inout TaskGroup<Inspected>) {
+                guard next < urls.count, !Task.isCancelled else { return }
+                let (index, url) = (next, urls[next])
+                next += 1
+                group.addTask { (index, Result { try inspect(url) }) }
+            }
+            for _ in 0..<max(1, ProcessInfo.processInfo.activeProcessorCount) {
+                add(into: &group)
+            }
+            for await (index, result) in group {
+                await each(index, result)
+                add(into: &group)
+            }
+        }
+    }
+
     public static func inspect(_ url: URL) throws -> Report {
         guard let doc = CGPDFDocument(url as CFURL), doc.numberOfPages > 0 else {
             throw PressError.scanFailed("Cannot open PDF \(url.lastPathComponent)")
@@ -59,9 +88,11 @@ public enum PDFInspector {
         guard doc.isUnlocked else {
             throw PressError.scanFailed("\(url.lastPathComponent) is password-protected")
         }
-        let fileBytes =
-            (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int)
-            .flatMap { $0 } ?? 0
+        // A size that can't be read is an error, not 0 bytes — 0 would
+        // read as "already small" and skip the file.
+        guard let fileBytes = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize else {
+            throw PressError.scanFailed("Cannot read the size of \(url.lastPathComponent)")
+        }
         let processedHere = producerIsPaperPress(doc)
 
         // One PageInfo per document page, unconditionally — Converter relies
@@ -74,12 +105,9 @@ public enum PDFInspector {
                 pages.append(PageInfo(kind: .bornDigital, widthPt: 595, heightPt: 842))
                 continue
             }
-            let box = page.orientedMediaBoxSize
-            let kind =
-                processedHere
-                ? PageKind.bornDigital
-                : classify(page: page, widthPt: box.width, heightPt: box.height)
-            pages.append(PageInfo(kind: kind, widthPt: box.width, heightPt: box.height))
+            let shown = page.visibleSize
+            let kind = processedHere ? PageKind.bornDigital : classify(page: page)
+            pages.append(PageInfo(kind: kind, widthPt: shown.width, heightPt: shown.height))
         }
 
         let scans = pages.filter {
@@ -116,8 +144,10 @@ public enum PDFInspector {
     /// converter (the inspector has no per-run Settings).
     static let assumedTextDpi = Double(Converter.Settings().dpiCap)
     static let assumedMinG4Dpi = Converter.Settings().minG4Dpi
-    /// 4-bit grayscale output density at native resolution (measured).
-    static let estimatedGray4BytesPerPixel = 0.11
+    /// 4-bit grayscale output density at native resolution: levelled and
+    /// deflated, a 150 dpi letter's full pages came to 0.09–0.11 bytes a
+    /// pixel.
+    static let estimatedGray4BytesPerPixel = 0.1
 
     /// Expected output size of one converted page. Pages scanned below
     /// the G4 resolution floor stay grayscale at native resolution
@@ -152,9 +182,7 @@ public enum PDFInspector {
 
     // MARK: Page classification
 
-    private static func classify(
-        page: CGPDFPage, widthPt: Double, heightPt: Double
-    ) -> PageKind {
+    private static func classify(page: CGPDFPage) -> PageKind {
         guard let dict = page.dictionary,
             let img = largestImage(inPageDict: dict)
         else {
@@ -163,17 +191,32 @@ public enum PDFInspector {
         // A "scan page" is one whose largest image plausibly covers the whole
         // page: aspect ratios match and the implied resolution is scanner-like.
         // OCR'd scans also carry a text layer, so text presence doesn't veto.
+        // Measured against the media box, which the scan image fills; a
+        // crop only hides part of it.
+        let media = page.orientedSize(of: .mediaBox)
+        let widthPt = Double(media.width)
+        let heightPt = Double(media.height)
         let pageAspect = widthPt / heightPt
         let imgAspect = Double(img.w) / Double(img.h)
-        let dpiX = Double(img.w) / (widthPt / 72)
-        let dpiY = Double(img.h) / (heightPt / 72)
-        let aspectMatch =
-            abs(pageAspect - imgAspect) / pageAspect < 0.2
-            || abs(pageAspect - 1 / imgAspect) / pageAspect < 0.2
-        guard aspectMatch, dpiX >= 40, dpiX <= 1300, abs(dpiX - dpiY) / dpiX < 0.35 else {
+        let upright = abs(pageAspect - imgAspect) / pageAspect < 0.2
+        let sideways = !upright && abs(pageAspect - 1 / imgAspect) / pageAspect < 0.2
+        guard upright || sideways else { return .bornDigital }
+        // A sideways image — a page shown with /Rotate 90, or a scan drawn
+        // rotated — runs its width along the page's height.
+        let (alongWidth, alongHeight) = upright ? (img.w, img.h) : (img.h, img.w)
+        let dpiX = Double(alongWidth) / (widthPt / 72)
+        let dpiY = Double(alongHeight) / (heightPt / 72)
+        guard dpiX >= 40, dpiX <= 1300, abs(dpiX - dpiY) / dpiX < 0.35 else {
             return .bornDigital
         }
         return .scan(dpi: Int(dpiX.rounded()), compact: img.compact)
+    }
+
+    /// True when the file at `url` is a PDF this app wrote (its Producer
+    /// carries the marker).
+    public static func isPaperPressOutput(_ url: URL) -> Bool {
+        guard let doc = CGPDFDocument(url as CFURL) else { return false }
+        return producerIsPaperPress(doc)
     }
 
     private struct ImageRef {

@@ -4,7 +4,7 @@ import Foundation
 /// and file packages. Paths come back sorted and relative to the root
 /// so the output tree can mirror the input.
 public enum FolderScanner {
-    public struct Item: Identifiable, Hashable {
+    public struct Item: Identifiable, Hashable, Sendable {
         public let url: URL
         public let relativePath: String
         public var id: String { relativePath }
@@ -21,7 +21,9 @@ public enum FolderScanner {
     /// back. Folder items are name-prefixed whenever the batch has more
     /// than one source (several URLs, or anything already present), so the
     /// same folder can't collide with other sources; duplicate names get a
-    /// numbered suffix.
+    /// numbered suffix. Names compare as a default APFS volume does —
+    /// ignoring case and Unicode normalisation — so "Scan.pdf" and
+    /// "scan.pdf" can't both claim what is one file on disk.
     public static func items(
         for urls: [URL], merging existing: [Item] = []
     ) -> [Item] {
@@ -42,7 +44,7 @@ public enum FolderScanner {
         }
 
         var seenSources = Set(existing.map { $0.url.standardizedFileURL.path })
-        var seenPaths = Set(existing.map(\.relativePath))
+        var seenPaths = Set(existing.map { pathKey($0.relativePath) })
         var items: [Item] = []
         for item in expanded {
             guard seenSources.insert(item.url.standardizedFileURL.path).inserted
@@ -50,7 +52,7 @@ public enum FolderScanner {
             var path = item.relativePath
             let base = (item.relativePath as NSString).deletingPathExtension
             var n = 2
-            while !seenPaths.insert(path).inserted {
+            while !seenPaths.insert(pathKey(path)).inserted {
                 path = "\(base)-\(n).pdf"
                 n += 1
             }
@@ -59,6 +61,11 @@ public enum FolderScanner {
         return items.sorted {
             $0.relativePath.localizedStandardCompare($1.relativePath) == .orderedAscending
         }
+    }
+
+    /// How an output path is compared for collisions.
+    static func pathKey(_ path: String) -> String {
+        path.precomposedStringWithCanonicalMapping.lowercased()
     }
 
     public static func pdfs(under root: URL) -> [Item] {

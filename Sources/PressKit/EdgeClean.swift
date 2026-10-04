@@ -20,9 +20,7 @@ public enum EdgeClean {
     public static func removeScanBorders(_ g: inout Pipeline.GrayImage, dpi: Int) {
         let w = g.width, h = g.height
         guard w > 8, h > 8 else { return }
-        guard let (inkLevel, paperLevel) = Binarize.classMeans(g),
-            paperLevel - inkLevel > Binarize.minContrast
-        else { return }
+        guard let (inkLevel, paperLevel) = Binarize.levels(g) else { return }
         let dark = UInt8(clamping: Int((inkLevel + paperLevel) / 2))
 
         // Dark border pixels seed the flood fill; most pages have none,

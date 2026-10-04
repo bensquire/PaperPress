@@ -3,30 +3,61 @@ import XCTest
 
 @testable import PressKit
 
-final class PDFWriterTests: XCTestCase {
-    func test_build_embedsInvisibleOCRTextLayer() throws {
-        // Arrange — a G4 page with one recognised word
-        let page = Fixtures.textPage()
-        let stream = try Converter.encodeG4(page, dpi: 150)
-        let words = [
-            OCR.Word(text: "HELLO", box: CGRect(x: 0.1, y: 0.8, width: 0.2, height: 0.05))
-        ]
-
-        // Act
-        let pdf = PDFWriter.build(
+final class PDFWriterTests: FixtureTestCase {
+    /// A one-page G4 PDF carrying `words` as its OCR layer, on disk.
+    private func ocrPDF(_ words: [OCR.Word]) throws -> URL {
+        let stream = try Converter.encodeG4(Fixtures.textPage(), dpi: 150)
+        let pdf = try PDFWriter.build(
             pages: [PDFWriter.Page(content: .g4(stream), dpi: 150, ocrWords: words)]
         )
+        return Fixtures.write(pdf, to: dir, name: "ocr.pdf")
+    }
 
-        // Assert — invisible render mode, the word, and the font resource
-        XCTAssertNotNil(pdf.range(of: Data("BT 3 Tr".utf8)))
-        XCTAssertNotNil(pdf.range(of: Data("(HELLO) Tj".utf8)))
-        XCTAssertNotNil(pdf.range(of: Data("/F1".utf8)))
+    private func word(_ text: String) -> OCR.Word {
+        OCR.Word(text: text, box: CGRect(x: 0.1, y: 0.8, width: 0.2, height: 0.05))
+    }
+
+    func test_build_embedsInvisibleOCRTextLayer() throws {
+        // Arrange / Act
+        let url = try ocrPDF([word("HELLO")])
+
+        // Assert — invisible render mode, the word, and a viewer finds it
+        let content = try XCTUnwrap(Fixtures.contentStream(of: url))
+        XCTAssertTrue(content.contains("BT 3 Tr"), "text layer should be invisible")
+        XCTAssertTrue(content.contains("(HELLO) Tj"), "word should be in the content stream")
+        XCTAssertTrue(
+            Fixtures.pageText(of: url).contains("HELLO"), "page text should be searchable"
+        )
+    }
+
+    func test_build_compressesTheTextLayer() throws {
+        // Arrange / Act — a page with plenty of OCR text
+        let words = (0..<200).map { word("invoice number \($0) for the archive") }
+        let url = try ocrPDF(words)
+
+        // Assert — the operators aren't stored raw
+        let file = try Data(contentsOf: url)
+        XCTAssertNil(
+            file.range(of: Data("BT 3 Tr".utf8)), "content stream should be Flate-compressed"
+        )
+        XCTAssertNotNil(file.range(of: Data("/Filter/FlateDecode>>".utf8)))
+    }
+
+    func test_build_ocrTextKeepsLatin1Accents() throws {
+        // Arrange / Act — accented and typographic characters from OCR
+        let url = try ocrPDF([word("Café – crème brûlée’s"), word("Grüße")])
+
+        // Assert — extracted as written, not blanked to spaces
+        let text = Fixtures.pageText(of: url)
+        XCTAssertTrue(text.contains("Café"), "got \(text)")
+        XCTAssertTrue(text.contains("brûlée’s"), "got \(text)")
+        XCTAssertTrue(text.contains("Grüße"), "got \(text)")
     }
 
     func test_build_stampsPaperPressProducerByDefault() throws {
         // Arrange / Act
         let page = Fixtures.textPage()
-        let pdf = PDFWriter.build(
+        let pdf = try PDFWriter.build(
             pages: [PDFWriter.Page(content: .g4(try Converter.encodeG4(page, dpi: 150)), dpi: 150)]
         )
 
@@ -44,6 +75,31 @@ final class PDFWriterTests: XCTestCase {
         // Assert
         XCTAssertNil(pdf.range(of: Data(PDFWriter.producerMarker.utf8)))
         XCTAssertNotNil(pdf.range(of: Data(Fixtures.foreignProducer.utf8)))
+    }
+
+    func test_build_copiedPagesShareTheirFont() throws {
+        // Arrange — two vector pages set in the same font
+        let src = Fixtures.write(
+            Fixtures.drawnPDF([.text("First page"), .text("Second page")]), to: dir, name: "v.pdf"
+        )
+        let doc = try XCTUnwrap(CGPDFDocument(src as CFURL))
+        let copier = PageCopier()
+        let copies = try (1...2).map { try copier.copy(try XCTUnwrap(doc.page(at: $0))) }
+
+        // Act
+        let one = try PDFWriter.build(pages: [PDFWriter.Page(original: copies[0])])
+        let two = try PDFWriter.build(pages: copies.map { PDFWriter.Page(original: $0) })
+
+        // Assert — the second page adds its content, not another font
+        let fonts = { (pdf: Data) in
+            String(decoding: pdf, as: UTF8.self).components(separatedBy: "/FontFile").count - 1
+        }
+        XCTAssertGreaterThan(fonts(one), 0, "fixture should embed a font program")
+        XCTAssertEqual(fonts(two), fonts(one), "shared font should be written once")
+        let url = Fixtures.write(two, to: dir, name: "two.pdf")
+        XCTAssertTrue(
+            Fixtures.pageText(of: url, page: 2).contains("Second page"),
+            "the second page should still reach the font it shares")
     }
 }
 

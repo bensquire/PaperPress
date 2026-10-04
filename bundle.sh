@@ -17,11 +17,20 @@ rm -rf $APP
 mkdir -p $APP/Contents/MacOS $APP/Contents/Resources
 cp .build/release/PaperPress $APP/Contents/MacOS/
 strip -rSTx $APP/Contents/MacOS/PaperPress
+# The MCP helper an assistant launches, beside the app's executable so
+# Settings can name its path.
+cp .build/release/paperpress-mcp $APP/Contents/MacOS/
+strip -rSTx $APP/Contents/MacOS/paperpress-mcp
 cp icon/PaperPress.icns $APP/Contents/Resources/
 # Info.plist lives as a real file (editor tooling, lintable) with the
 # version templated in.
 sed "s/@VERSION@/${VERSION}/" scripts/Info.plist.template \
     > $APP/Contents/Info.plist
 plutil -lint -s $APP/Contents/Info.plist
+# The helper first: sealing the app covers it, and notarisation wants every
+# executable signed with the hardened runtime.
+codesign --force --options runtime --timestamp --sign "$IDENTITY" \
+    $APP/Contents/MacOS/paperpress-mcp
 codesign --force --options runtime --timestamp --sign "$IDENTITY" $APP
+codesign --verify --strict --deep $APP
 echo "built and signed $PWD/$APP (v$VERSION)"

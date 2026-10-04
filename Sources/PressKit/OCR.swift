@@ -23,6 +23,11 @@ public enum OCR {
         let request = VNRecognizeTextRequest()
         request.recognitionLevel = .accurate
         request.usesLanguageCorrection = true
+        // recognitionLanguages defaults to ["en_US"], but that doesn't
+        // confine recognition: German, French, Spanish and Russian lines
+        // read identically with automaticallyDetectsLanguage on or off
+        // (macOS 26, full size and at 0.45x), and detection cost ~3% per
+        // page — so it stays off.
         try VNImageRequestHandler(cgImage: img).perform([request])
         var words: [Word] = []
         for obs in request.results ?? [] {

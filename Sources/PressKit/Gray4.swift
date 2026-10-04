@@ -1,5 +1,5 @@
-import Compression
 import Foundation
+import zlib
 
 /// 4-bit grayscale page encoding: 16 levels, packed two pixels per byte,
 /// PNG "Up" row predictor, zlib deflate. The middle ground between 1-bit
@@ -8,7 +8,7 @@ import Foundation
 /// Dithering was measured and rejected — the noise triples the Flate size
 /// and 16 levels don't band on paper-and-ink content.
 public enum Gray4 {
-    public struct Encoded {
+    public struct Encoded: Sendable {
         /// zlib-wrapped deflate of predictor-filtered rows, ready to embed
         /// as a FlateDecode image stream with PNG Predictor DecodeParms.
         public let data: Data
@@ -16,7 +16,7 @@ public enum Gray4 {
         public let height: Int
     }
 
-    public static func encode(_ g: Pipeline.GrayImage) -> Encoded {
+    public static func encode(_ g: Pipeline.GrayImage) throws -> Encoded {
         let w = g.width, h = g.height
         let rowBytes = (w + 1) / 2
 
@@ -48,49 +48,15 @@ public enum Gray4 {
             }
         }
 
-        return Encoded(data: zlib(Data(raw)), width: w, height: h)
-    }
-
-    /// Apple's Compression framework emits raw deflate; PDF FlateDecode
-    /// wants the RFC 1950 zlib wrapper, so add header + adler32 ourselves.
-    private static func zlib(_ raw: Data) -> Data {
-        let cap = raw.count + raw.count / 2 + 1024
-        var deflated = Data(count: cap)
-        let n = deflated.withUnsafeMutableBytes { dst in
-            raw.withUnsafeBytes { src in
-                compression_encode_buffer(
-                    dst.bindMemory(to: UInt8.self).baseAddress!, cap,
-                    src.bindMemory(to: UInt8.self).baseAddress!, raw.count,
-                    nil, COMPRESSION_ZLIB
-                )
-            }
-        }
-        var out = Data([0x78, 0x9C])
-        out.append(deflated.prefix(n))
-        var a: UInt32 = 1
-        var b: UInt32 = 0
-        raw.withUnsafeBytes { buf in
-            // Modulo only every 5552 bytes (the standard adler32 chunk —
-            // the largest run that can't overflow UInt32).
-            var i = 0
-            while i < buf.count {
-                let end = min(i + 5552, buf.count)
-                while i < end {
-                    a &+= UInt32(buf[i])
-                    b &+= a
-                    i += 1
-                }
-                a %= 65521
-                b %= 65521
-            }
-        }
-        let adler = (b << 16) | a
-        out.append(
-            contentsOf: [
-                UInt8(adler >> 24), UInt8((adler >> 16) & 0xFF),
-                UInt8((adler >> 8) & 0xFF), UInt8(adler & 0xFF),
-            ]
-        )
-        return out
+        // Run-length deflate is the smallest and ~60× faster on scanned pages,
+        // whose noise leaves little for long matches (a 150 dpi letter's page
+        // at 300 dpi: 510 KB in 13 ms against level 9's 526 KB in 854 ms) —
+        // and 24× larger on clean ones, where repeated glyphs are the matches
+        // (295 KB against 12 KB). So both run-length and level 6 (a tenth of
+        // level 9's time for ~3% more), and the smaller.
+        let filtered = Data(raw)
+        let rle = try Deflate.zlibData(filtered, level: 6, strategy: Z_RLE)
+        let matched = try Deflate.zlibData(filtered, level: 6)
+        return Encoded(data: rle.count <= matched.count ? rle : matched, width: w, height: h)
     }
 }

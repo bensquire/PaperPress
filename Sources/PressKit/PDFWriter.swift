@@ -2,24 +2,19 @@ import Foundation
 
 /// Minimal PDF writer. Pages are CCITT G4 streams (1-bit documents,
 /// embedded losslessly), grayscale JPEGs (photo-ish pages, DCTDecode),
-/// or 4-bit grayscale Flate (demoted text pages).
-/// An invisible OCR text layer (render mode 3) makes pages searchable.
+/// 4-bit grayscale Flate (demoted text pages), or born-digital pages
+/// copied from their source unchanged.
+/// An invisible OCR text layer (render mode 3) makes raster pages
+/// searchable.
 public enum PDFWriter {
-    public enum Content {
+    public enum Content: Sendable {
         case g4(G4.Stream)
         case jpegGray(Data, width: Int, height: Int)
         case gray4Flate(Gray4.Encoded)
-
-        var size: (w: Int, h: Int) {
-            switch self {
-            case let .g4(s): (s.width, s.height)
-            case let .jpegGray(_, w, h): (w, h)
-            case let .gray4Flate(e): (e.width, e.height)
-            }
-        }
+        case original(CopiedPage)
     }
 
-    public struct Page {
+    public struct Page: Sendable {
         public let content: Content
         public let dpi: Int
         public let ocrWords: [OCR.Word]
@@ -41,9 +36,26 @@ public enum PDFWriter {
             self.bedOriginPt = bedOriginPt
         }
 
+        /// A born-digital page carried over as it was.
+        public init(original: CopiedPage) {
+            self.init(content: .original(original), dpi: 72)
+        }
+
         public var naturalSizePt: (w: Double, h: Double) {
-            let (w, h) = content.size
-            return (Double(w) / Double(dpi) * 72, Double(h) / Double(dpi) * 72)
+            switch content {
+            case let .original(copied):
+                return copied.sizePt
+            case let .g4(s):
+                return points(s.width, s.height)
+            case let .jpegGray(_, w, h):
+                return points(w, h)
+            case let .gray4Flate(e):
+                return points(e.width, e.height)
+            }
+        }
+
+        private func points(_ w: Int, _ h: Int) -> (w: Double, h: Double) {
+            (Double(w) / Double(dpi) * 72, Double(h) / Double(dpi) * 72)
         }
     }
 
@@ -53,19 +65,63 @@ public enum PDFWriter {
     /// appended later; the inspector matches by prefix.
     public static let producerMarker = "PaperPress"
 
+    /// Indirect objects by number (1-based); bodies filled in any order.
+    private struct ObjectTable {
+        var bodies: [Data] = []
+
+        mutating func reserve() -> Int {
+            bodies.append(Data())
+            return bodies.count
+        }
+
+        mutating func add(_ body: Data) -> Int {
+            bodies.append(body)
+            return bodies.count
+        }
+
+        mutating func set(_ id: Int, _ body: Data) {
+            bodies[id - 1] = body
+        }
+    }
+
     public static func build(
         pages: [Page], producer: String = PDFWriter.producerMarker
-    ) -> Data {
-        var objects: [Data] = []
-        var pageObjectIDs: [Int] = []
-
-        // obj 1 = catalog, obj 2 = pages tree, obj 3 = OCR font (filled at end)
-        objects.append(Data())
-        objects.append(Data())
-        objects.append(Data())
+    ) throws -> Data {
+        var table = ObjectTable()
+        let catalogID = table.reserve()
+        let pagesID = table.reserve()
+        let fontID = table.reserve()
+        // Objects copied from source pages, numbered on first use so
+        // pages sharing a font or image share the one object.
+        var copiedIDs: [CopiedPage.Key: Int] = [:]
+        var pageIDs: [Int] = []
 
         for page in pages {
-            let (w, h) = page.content.size
+            let image: Data
+            switch page.content {
+            case let .original(copied):
+                pageIDs.append(place(copied, parent: pagesID, in: &table, numbered: &copiedIDs))
+                continue
+            case let .g4(stream):
+                // Empirically (ImageIO G4 + Preview): a min-is-black TIFF
+                // stream needs BlackIs1 true to render upright.
+                image = imageXObject(
+                    "/Width \(stream.width)/Height \(stream.height)/ColorSpace/DeviceGray"
+                        + "/BitsPerComponent 1/Filter/CCITTFaxDecode/DecodeParms<</K -1"
+                        + "/Columns \(stream.width)/Rows \(stream.height)"
+                        + "/BlackIs1 \(stream.minIsBlack ? "true" : "false")>>",
+                    stream.data)
+            case let .jpegGray(jpeg, w, h):
+                image = imageXObject(
+                    "/Width \(w)/Height \(h)/ColorSpace/DeviceGray/BitsPerComponent 8/Filter/DCTDecode",
+                    jpeg)
+            case let .gray4Flate(e):
+                image = imageXObject(
+                    "/Width \(e.width)/Height \(e.height)/ColorSpace/DeviceGray/BitsPerComponent 4"
+                        + "/Filter/FlateDecode/DecodeParms<</Predictor 15/Colors 1/BitsPerComponent 4"
+                        + "/Columns \(e.width)>>",
+                    e.data)
+            }
             let (ptW, ptH) = page.naturalSizePt
             let boxW = max(page.pageSizePt?.w ?? ptW, ptW)
             let boxH = max(page.pageSizePt?.h ?? ptH, ptH)
@@ -76,107 +132,80 @@ public enum PDFWriter {
             let oyTop = min(page.bedOriginPt.y, boxH - ptH)
             let oy = boxH - ptH - oyTop
 
-            let imgID = objects.count + 1
-            var img: Data
-            switch page.content {
-            case let .g4(stream):
-                // Empirically (ImageIO G4 + Preview): a min-is-black TIFF
-                // stream needs BlackIs1 true to render upright.
-                img = Data(
-                    """
-                    <</Type/XObject/Subtype/Image/Width \(w)/Height \(h)\
-                    /ColorSpace/DeviceGray/BitsPerComponent 1\
-                    /Filter/CCITTFaxDecode/DecodeParms<</K -1/Columns \(w)/Rows \(h)\
-                    /BlackIs1 \(stream.minIsBlack ? "true" : "false")>>\
-                    /Length \(stream.data.count)>>\nstream\n
-                    """.utf8
-                )
-                img.append(stream.data)
-            case let .jpegGray(jpeg, _, _):
-                img = Data(
-                    """
-                    <</Type/XObject/Subtype/Image/Width \(w)/Height \(h)\
-                    /ColorSpace/DeviceGray/BitsPerComponent 8/Filter/DCTDecode\
-                    /Length \(jpeg.count)>>\nstream\n
-                    """.utf8
-                )
-                img.append(jpeg)
-            case let .gray4Flate(e):
-                img = Data(
-                    """
-                    <</Type/XObject/Subtype/Image/Width \(w)/Height \(h)\
-                    /ColorSpace/DeviceGray/BitsPerComponent 4/Filter/FlateDecode\
-                    /DecodeParms<</Predictor 15/Colors 1/BitsPerComponent 4/Columns \(w)>>\
-                    /Length \(e.data.count)>>\nstream\n
-                    """.utf8
-                )
-                img.append(e.data)
-            }
-            img.append(Data("\nendstream".utf8))
-            objects.append(img)
+            let imgID = table.add(image)
 
-            let contentID = objects.count + 1
             var content = "q \(fmt(ptW)) 0 0 \(fmt(ptH)) \(fmt(ox)) \(fmt(oy)) cm /Im0 Do Q"
             if !page.ocrWords.isEmpty {
                 content += "\nBT 3 Tr"
                 for word in page.ocrWords {
-                    let text = pdfEscape(word.text)
-                    guard !text.isEmpty else { continue }
+                    let (text, glyphs) = winAnsiLiteral(word.text)
+                    guard glyphs > 0 else { continue }
                     let x = ox + word.box.minX * ptW
                     let y = oy + word.box.minY * ptH
                     let boxW = word.box.width * ptW
                     let size = max(4, word.box.height * ptH)
                     // Horizontal scale so the string spans the detected box.
-                    let nominal = Double(text.count) * size * 0.5
+                    let nominal = Double(glyphs) * size * 0.5
                     let tz = nominal > 0 ? boxW / nominal * 100 : 100
                     content += "\n/F1 \(fmt(size)) Tf \(fmt(min(500, max(20, tz)))) Tz"
                     content += " 1 0 0 1 \(fmt(x)) \(fmt(y)) Tm (\(text)) Tj"
                 }
                 content += "\nET"
             }
-            var cobj = Data("<</Length \(content.utf8.count)>>\nstream\n".utf8)
-            cobj.append(Data(content.utf8))
+            // The text layer is several KB of operators per page — a fifth
+            // of a typical 20 KB G4 page until deflated (measured: 5.7 KB
+            // raw, about 1.5 KB compressed, on a dense page).
+            let stream = try Deflate.zlibData(Data(content.utf8))
+            var cobj = Data("<</Length \(stream.count)/Filter/FlateDecode>>\nstream\n".utf8)
+            cobj.append(stream)
             cobj.append(Data("\nendstream".utf8))
-            objects.append(cobj)
+            let contentID = table.add(cobj)
 
-            let fontRes = page.ocrWords.isEmpty ? "" : "/Font<</F1 3 0 R>>"
-            let pageID = objects.count + 1
-            objects.append(
-                Data(
-                    """
-                    <</Type/Page/Parent 2 0 R/MediaBox[0 0 \(fmt(boxW)) \(fmt(boxH))]\
-                    /Resources<</XObject<</Im0 \(imgID) 0 R>>\(fontRes)>>/Contents \(contentID) 0 R>>
-                    """.utf8
+            let fontRes = page.ocrWords.isEmpty ? "" : "/Font<</F1 \(fontID) 0 R>>"
+            pageIDs.append(
+                table.add(
+                    Data(
+                        """
+                        <</Type/Page/Parent \(pagesID) 0 R/MediaBox[0 0 \(fmt(boxW)) \(fmt(boxH))]\
+                        /Resources<</XObject<</Im0 \(imgID) 0 R>>\(fontRes)>>/Contents \(contentID) 0 R>>
+                        """.utf8
+                    )
                 )
             )
-            pageObjectIDs.append(pageID)
         }
 
-        objects[0] = Data("<</Type/Catalog/Pages 2 0 R>>".utf8)
-        let kids = pageObjectIDs.map { "\($0) 0 R" }.joined(separator: " ")
-        objects[1] = Data("<</Type/Pages/Kids[\(kids)]/Count \(pageObjectIDs.count)>>".utf8)
-        objects[2] = Data("<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>".utf8)
+        table.set(catalogID, Data("<</Type/Catalog/Pages \(pagesID) 0 R>>".utf8))
+        let kids = pageIDs.map { "\($0) 0 R" }.joined(separator: " ")
+        table.set(pagesID, Data("<</Type/Pages/Kids[\(kids)]/Count \(pageIDs.count)>>".utf8))
+        // WinAnsiEncoding so the OCR layer carries Latin-1 text (accents,
+        // curly quotes, dashes), not just ASCII.
+        table.set(
+            fontID,
+            Data("<</Type/Font/Subtype/Type1/BaseFont/Helvetica/Encoding/WinAnsiEncoding>>".utf8)
+        )
         // Document Info: the Producer marks output as already converted,
         // so re-analysing it yields a pass-through verdict (idempotency).
-        let infoID = objects.count + 1
-        objects.append(Data("<</Producer (\(pdfEscape(producer)))>>".utf8))
+        let infoID = table.add(Data("<</Producer (\(winAnsiLiteral(producer).literal))>>".utf8))
 
-        var out = Data("%PDF-1.4\n%\u{00E2}\u{00E3}\u{00CF}\u{00D3}\n".utf8)
+        var out = Data("%PDF-1.4\n%".utf8)
+        out.append(contentsOf: [0xE2, 0xE3, 0xCF, 0xD3, 0x0A])
         var offsets: [Int] = []
-        for (i, obj) in objects.enumerated() {
+        for (i, body) in table.bodies.enumerated() {
             offsets.append(out.count)
             out.append(Data("\(i + 1) 0 obj\n".utf8))
-            out.append(obj)
+            out.append(body)
             out.append(Data("\nendobj\n".utf8))
         }
         let xrefStart = out.count
-        out.append(Data("xref\n0 \(objects.count + 1)\n0000000000 65535 f \n".utf8))
+        out.append(Data("xref\n0 \(table.bodies.count + 1)\n0000000000 65535 f \n".utf8))
         for off in offsets {
-            out.append(Data(String(format: "%010d 00000 n \n", off).utf8))
+            let digits = String(off)
+            let padded = String(repeating: "0", count: max(0, 10 - digits.count)) + digits
+            out.append(Data("\(padded) 00000 n \n".utf8))
         }
         out.append(
             Data(
-                "trailer\n<</Size \(objects.count + 1)/Root 1 0 R/Info \(infoID) 0 R>>\n"
+                "trailer\n<</Size \(table.bodies.count + 1)/Root \(catalogID) 0 R/Info \(infoID) 0 R>>\n"
                     .utf8
             )
         )
@@ -184,21 +213,166 @@ public enum PDFWriter {
         return out
     }
 
+    private static func imageXObject(_ dictionary: String, _ body: Data) -> Data {
+        var img = Data("<</Type/XObject/Subtype/Image\(dictionary)/Length \(body.count)>>\nstream\n".utf8)
+        img.append(body)
+        img.append(Data("\nendstream".utf8))
+        return img
+    }
+
+    // MARK: Copied pages
+
+    /// Writes a copied page's objects not already in the file and returns
+    /// the page object's number.
+    private static func place(
+        _ copied: CopiedPage, parent: Int, in table: inout ObjectTable,
+        numbered ids: inout [CopiedPage.Key: Int]
+    ) -> Int {
+        var fresh: [(id: Int, body: CopiedPage.Body)] = []
+        for (key, body) in copied.objects where ids[key] == nil {
+            let id = table.reserve()
+            ids[key] = id
+            fresh.append((id, body))
+        }
+        for (id, body) in fresh {
+            var out = Data()
+            switch body {
+            case let .dictionary(entries):
+                out.append(Data("<<".utf8))
+                if id == ids[copied.page] {
+                    out.append(Data("/Parent \(parent) 0 R".utf8))
+                }
+                serialise(entries, ids, into: &out)
+                out.append(Data(">>".utf8))
+            case let .stream(entries, data):
+                out.append(Data("<<".utf8))
+                serialise(entries, ids, into: &out)
+                out.append(Data("/Length \(data.count)>>\nstream\n".utf8))
+                out.append(data)
+                out.append(Data("\nendstream".utf8))
+            }
+            table.set(id, out)
+        }
+        return ids[copied.page] ?? 0
+    }
+
+    private static func serialise(
+        _ entries: [CopiedPage.Entry], _ ids: [CopiedPage.Key: Int], into out: inout Data
+    ) {
+        for (key, value) in entries {
+            out.append(name(key))
+            out.append(0x20)
+            serialise(value, ids, into: &out)
+        }
+    }
+
+    private static func serialise(
+        _ value: PDFObject, _ ids: [CopiedPage.Key: Int], into out: inout Data
+    ) {
+        switch value {
+        case .null:
+            out.append(Data("null".utf8))
+        case let .bool(b):
+            out.append(Data((b ? "true" : "false").utf8))
+        case let .int(i):
+            out.append(Data(String(i).utf8))
+        case let .real(r):
+            out.append(Data(real(r).utf8))
+        case let .name(bytes):
+            out.append(name(bytes))
+        case let .string(bytes):
+            // Hex: binary-safe whatever the bytes are.
+            out.append(0x3C)
+            for b in bytes {
+                out.append(Data(String(format: "%02X", b).utf8))
+            }
+            out.append(0x3E)
+        case let .array(items):
+            out.append(0x5B)
+            for (i, item) in items.enumerated() {
+                if i > 0 { out.append(0x20) }
+                serialise(item, ids, into: &out)
+            }
+            out.append(0x5D)
+        case let .ref(key):
+            // Every copied object is in the page's closure; null is the
+            // spec's meaning for a reference to a missing object anyway.
+            if let id = ids[key] {
+                out.append(Data("\(id) 0 R".utf8))
+            } else {
+                out.append(Data("null".utf8))
+            }
+        }
+    }
+
+    /// A PDF name: regular characters as themselves, the rest #-escaped.
+    private static func name(_ bytes: [UInt8]) -> Data {
+        var out = Data([0x2F])
+        let delimiters = Set("()<>[]{}/%#".utf8)
+        for b in bytes {
+            if b > 0x20, b < 0x7F, !delimiters.contains(b) {
+                out.append(b)
+            } else {
+                out.append(Data(String(format: "#%02X", b).utf8))
+            }
+        }
+        return out
+    }
+
+    /// PDF reals have no exponent form.
+    private static func real(_ r: Double) -> String {
+        guard r.isFinite else { return "0" }
+        var s = String(format: "%.6f", r)
+        while s.hasSuffix("0") { s.removeLast() }
+        if s.hasSuffix(".") { s.removeLast() }
+        return s == "-0" ? "0" : s
+    }
+
     private static func fmt(_ d: Double) -> String {
         String(format: "%.2f", d)
     }
 
-    private static func pdfEscape(_ s: String) -> String {
+    // MARK: Text
+
+    /// WinAnsiEncoding's codes 0x80–0x9F, which (unlike the rest of
+    /// Latin-1) don't share their Unicode code points.
+    private static let winAnsiExtras: [Unicode.Scalar: UInt8] = [
+        "€": 0x80, "‚": 0x82, "ƒ": 0x83, "„": 0x84, "…": 0x85, "†": 0x86, "‡": 0x87,
+        "ˆ": 0x88, "‰": 0x89, "Š": 0x8A, "‹": 0x8B, "Œ": 0x8C, "Ž": 0x8E, "‘": 0x91,
+        "’": 0x92, "“": 0x93, "”": 0x94, "•": 0x95, "–": 0x96, "—": 0x97, "˜": 0x98,
+        "™": 0x99, "š": 0x9A, "›": 0x9B, "œ": 0x9C, "ž": 0x9E, "Ÿ": 0x9F,
+    ]
+
+    /// A string literal body for the WinAnsi-encoded font: ASCII as
+    /// itself, other WinAnsi characters as octal escapes (so the content
+    /// stream stays ASCII), and anything outside WinAnsi as a space.
+    /// `glyphs` counts characters before escaping, for the width maths.
+    static func winAnsiLiteral(_ s: String) -> (literal: String, glyphs: Int) {
         var out = ""
-        for ch in s.unicodeScalars {
+        var glyphs = 0
+        for ch in s.precomposedStringWithCanonicalMapping.unicodeScalars {
+            glyphs += 1
             switch ch {
             case "(": out += "\\("
             case ")": out += "\\)"
             case "\\": out += "\\\\"
-            case let c where c.isASCII && c.value >= 32: out.unicodeScalars.append(c)
-            default: out += " "  // non-Latin fallback; searchability over fidelity
+            case let c where c.value >= 0x20 && c.value < 0x7F:
+                out.unicodeScalars.append(c)
+            case let c where c.value >= 0xA0 && c.value <= 0xFF:
+                out += octal(UInt8(c.value))
+            case let c:
+                if let code = winAnsiExtras[c] {
+                    out += octal(code)
+                } else {
+                    out += " "
+                }
             }
         }
-        return out
+        return (out, glyphs)
+    }
+
+    private static func octal(_ b: UInt8) -> String {
+        let digits = String(b, radix: 8)
+        return "\\" + String(repeating: "0", count: 3 - digits.count) + digits
     }
 }

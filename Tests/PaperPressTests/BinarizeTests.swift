@@ -119,23 +119,26 @@ final class BinarizeTests: XCTestCase {
 
     func test_sauvola_bandedMatchesBruteForceReference() {
         // Arrange — small random-ish page spanning several bands so the
-        // strip reuse and band boundaries are exercised
+        // strip reuse and band boundaries are exercised, with dark marks so
+        // the stroke cap engages
         var rng = SeededRandom()
         let w = 90, h = 300
         var pixels = [UInt8](repeating: 0, count: w * h)
         for i in 0..<pixels.count {
-            pixels[i] = 150 &+ (rng.next() % 100)
+            pixels[i] = rng.next() % 8 == 0 ? 20 &+ (rng.next() % 40) : 200 &+ (rng.next() % 50)
         }
         let g = Pipeline.GrayImage(width: w, height: h, pixels: pixels)
         let dpi = 300
-        let window = max(25, dpi / 6) | 1
-        let r = window / 2
+        let r = Binarize.window(dpi: dpi) / 2
         let k = 0.15
+        let cap = Binarize.levels(g).map(Binarize.StrokeCap.init)
 
         // Act
         let banded = Binarize.sauvola(g, dpi: dpi, k: k)
 
-        // Assert — every pixel matches a brute-force local mean/std Sauvola
+        // Assert — every pixel matches the threshold from a brute-force
+        // local mean and variance (the banded integrals are under test, not
+        // the threshold formula they feed)
         for y in stride(from: 0, to: h, by: 7) {
             for x in stride(from: 0, to: w, by: 5) {
                 var sum = 0.0
@@ -150,13 +153,84 @@ final class BinarizeTests: XCTestCase {
                     }
                 }
                 let mean = sum / n
-                let sd = max(0, sq / n - mean * mean).squareRoot()
-                let t = mean * (1 + k * (sd / Binarize.dynamicRange - 1))
+                let t = Binarize.threshold(
+                    mean: mean, variance: max(0, sq / n - mean * mean), k: k, cap: cap)
                 XCTAssertEqual(
                     banded[x, y], Double(g.pixels[y * w + x]) < t,
                     "mismatch at (\(x),\(y))"
                 )
             }
         }
+    }
+
+    func test_sauvola_keepsALoneDotOnSlightlyBrighterPaper() {
+        // Arrange — text sets the page's paper at 240; a patch a shade
+        // brighter holds one 6 px black dot, a full stop on its own (the
+        // case where the stroke cap's estimate ran away: uncapped, it
+        // erased all 36 pixels)
+        var page = Fixtures.textPage(width: 600, height: 800)
+        for i in page.pixels.indices where page.pixels[i] == 250 { page.pixels[i] = 240 }
+        var rng = SeededRandom(seed: 3)
+        for y in 700..<790 {
+            for x in 400..<590 {
+                page.pixels[y * 600 + x] = rng.next() % 5 == 0 ? 241 : 242
+            }
+        }
+        for y in 740..<746 { for x in 490..<496 { page.pixels[y * 600 + x] = 20 } }
+
+        // Act
+        let bw = Binarize.sauvola(page, dpi: 300)
+
+        // Assert
+        let dot = (740..<746).flatMap { y in (490..<496).map { x in bw[x, y] } }
+        XCTAssertEqual(dot.count { $0 }, 36, "the dot should survive whole")
+    }
+
+    /// How much ink a page carries once averaged down by `factor`: 0 for
+    /// paper, 1 for ink at the given levels.
+    private func inkMass(
+        _ g: Pipeline.GrayImage, ink: Double, paper: Double, averagedBy factor: Double
+    ) -> Double {
+        let small = g.resampled(scale: 1 / factor)
+        return small.pixels.reduce(0.0) {
+            $0 + max(0, min(1, (paper - Double($1)) / (paper - ink)))
+        } / Double(small.pixels.count)
+    }
+
+    func test_sauvola_keepsDarkPrintsWeight() {
+        // Arrange — real type (ink 13, paper 250) as a 150 dpi scan rendered
+        // at 300, the way the converter sees it
+        let gray = Fixtures.renderedTextPage(fontSize: 20, ink: 0.05).resampled(scale: 2)
+
+        // Act
+        let bw = Binarize.sauvola(gray, dpi: 300)
+
+        // Assert — about the scan's own weight (Sauvola alone: 1.27×)
+        let binary = Pipeline.GrayImage(
+            width: bw.width, height: bw.height, pixels: bw.ink.map { $0 ? 0 : 255 })
+        let weight =
+            inkMass(binary, ink: 0, paper: 255, averagedBy: 2)
+            / inkMass(gray, ink: 0.05 * 255, paper: 250, averagedBy: 2)
+        XCTAssertEqual(weight, 1, accuracy: 0.12, "stroke weight \(weight)× the scan's")
+    }
+}
+
+final class DespeckleTests: XCTestCase {
+    func test_despeckle_removesExactlyWhatComponentLabellingRemoves() {
+        // Arrange — random ink at ~16% density: lone dots, pairs, triples
+        // and larger clumps, all touching in every arrangement
+        var rng = SeededRandom()
+        let w = 300, h = 200
+        let ink = (0..<(w * h)).map { _ in rng.next() < 40 }
+        var labelled = Pipeline.BinaryImage(width: w, height: h, ink: ink)
+        var searched = labelled
+
+        // Act
+        Pipeline.cleanComponents(&labelled, removeBorder: false)
+        Pipeline.despeckle(&searched)
+
+        // Assert
+        XCTAssertNotEqual(searched.ink, ink, "fixture should contain specks")
+        XCTAssertEqual(searched.ink, labelled.ink, "both should remove the same pixels")
     }
 }

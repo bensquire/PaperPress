@@ -49,6 +49,23 @@ final class PDFInspectorTests: FixtureTestCase {
         XCTAssertFalse(compact)
     }
 
+    func test_inspect_rotatedScanPage_isStillAScan() throws {
+        // Arrange — a 300 dpi scan whose page is shown rotated, as Preview
+        // writes it after "Rotate Left"
+        let page = Fixtures.textPage(width: 2480, height: 3508, noise: true)
+        let upright = Fixtures.write(
+            Fixtures.scannedPDF(pages: [page], dpi: 300), to: dir, name: "upright.pdf"
+        )
+        let rotated = Fixtures.edited(upright, as: "rotated.pdf") { $0.rotation = 90 }
+
+        // Act
+        let report = try PDFInspector.inspect(rotated)
+
+        // Assert
+        XCTAssertEqual(report.pages.map(\.kind), [.scan(dpi: 300, compact: false)])
+        XCTAssertEqual(report.verdict, .convert)
+    }
+
     func test_inspect_g4PDF_passesThroughAsAlreadyCompact() throws {
         // Arrange
         let page = Fixtures.textPage(width: 1240, height: 1754)
@@ -122,8 +139,8 @@ final class PDFInspectorTests: FixtureTestCase {
     func test_inspect_foreignGray4PDF_passesThroughAsAlreadyCompact() throws {
         // Arrange — a 4-bit page from another producer (no marker)
         let page = Fixtures.photoPage(width: 620, height: 800)
-        let pdf = PDFWriter.build(
-            pages: [PDFWriter.Page(content: .gray4Flate(Gray4.encode(page)), dpi: 75)],
+        let pdf = try PDFWriter.build(
+            pages: [PDFWriter.Page(content: .gray4Flate(try Gray4.encode(page)), dpi: 75)],
             producer: Fixtures.foreignProducer
         )
         let url = Fixtures.write(pdf, to: dir, name: "gray4.pdf")

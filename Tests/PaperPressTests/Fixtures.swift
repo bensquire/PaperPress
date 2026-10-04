@@ -1,6 +1,7 @@
 import CoreGraphics
 import CoreText
 import Foundation
+import PDFKit
 import XCTest
 
 @testable import PressKit
@@ -112,7 +113,7 @@ enum Fixtures {
     static func scannedPDF(pages: [Pipeline.GrayImage], dpi: Int, quality: Double = 0.95)
         -> Data
     {
-        PDFWriter.build(
+        try! PDFWriter.build(
             pages: pages.map { g in
                 PDFWriter.Page(
                     content: .jpegGray(
@@ -130,7 +131,7 @@ enum Fixtures {
     /// same path the product uses, so the fixture can't drift from real
     /// output.
     static func g4PDF(pages: [Pipeline.GrayImage], dpi: Int) throws -> Data {
-        PDFWriter.build(
+        try PDFWriter.build(
             pages: try pages.map { g in
                 PDFWriter.Page(
                     content: .g4(try Converter.encodeG4(g, dpi: dpi)),
@@ -156,6 +157,83 @@ enum Fixtures {
         ctx.endPDFPage()
         ctx.closePDF()
         return data as Data
+    }
+
+    enum DrawnPage {
+        /// Real type in a real font: vector, extractable text.
+        case text(String)
+        /// A full-page raster image, as a scanner app writes it.
+        case scan(Pipeline.GrayImage, dpi: Int)
+    }
+
+    /// A PDF drawn straight into a Quartz PDF context — the way other apps
+    /// write them, so born-digital pages carry real fonts and resources.
+    static func drawnPDF(_ pages: [DrawnPage]) -> Data {
+        let data = NSMutableData()
+        let consumer = CGDataConsumer(data: data)!
+        var a4 = CGRect(x: 0, y: 0, width: 595, height: 842)
+        let ctx = CGContext(consumer: consumer, mediaBox: &a4, nil)!
+        for page in pages {
+            switch page {
+            case let .text(string):
+                ctx.beginPDFPage(nil)
+                let font = CTFontCreateWithName("Helvetica" as CFString, 24, nil)
+                let attrs: [CFString: Any] = [kCTFontAttributeName: font]
+                let line = CTLineCreateWithAttributedString(
+                    CFAttributedStringCreate(nil, string as CFString, attrs as CFDictionary)!)
+                ctx.textPosition = CGPoint(x: 60, y: 700)
+                CTLineDraw(line, ctx)
+                ctx.endPDFPage()
+            case let .scan(gray, dpi):
+                var box = CGRect(
+                    x: 0, y: 0, width: Double(gray.width) / Double(dpi) * 72,
+                    height: Double(gray.height) / Double(dpi) * 72)
+                let info = [kCGPDFContextMediaBox: Data(bytes: &box, count: MemoryLayout<CGRect>.size)]
+                ctx.beginPDFPage(info as CFDictionary)
+                ctx.draw(gray.cgImage!, in: box)
+                ctx.endPDFPage()
+            }
+        }
+        ctx.closePDF()
+        return data as Data
+    }
+
+    /// Rewrites `url` through PDFKit with each page changed by `edit` —
+    /// rotation and crop boxes, as Preview sets them.
+    @discardableResult
+    static func edited(_ url: URL, as name: String, _ edit: (PDFPage) -> Void) -> URL {
+        let doc = PDFDocument(url: url)!
+        for i in 0..<doc.pageCount {
+            edit(doc.page(at: i)!)
+        }
+        let out = url.deletingLastPathComponent().appendingPathComponent(name)
+        precondition(doc.write(to: out))
+        return out
+    }
+
+    /// A page's content stream, decoded.
+    static func contentStream(of url: URL, page: Int = 1) -> String? {
+        guard let doc = CGPDFDocument(url as CFURL), let dict = doc.page(at: page)?.dictionary
+        else { return nil }
+        var stream: CGPDFStreamRef?
+        guard CGPDFDictionaryGetStream(dict, "Contents", &stream), let stream else { return nil }
+        var format = CGPDFDataFormat.raw
+        return (CGPDFStreamCopyData(stream, &format) as Data?).map {
+            String(decoding: $0, as: UTF8.self)
+        }
+    }
+
+    /// A page as a viewer draws it, in grayscale.
+    static func rendered(_ url: URL, page: Int = 1, dpi: Int) throws -> Pipeline.GrayImage {
+        guard let pdfPage = CGPDFDocument(url as CFURL)?.page(at: page) else {
+            throw PressError.scanFailed("no page \(page) in \(url.lastPathComponent)")
+        }
+        return try PDFRender.gray(page: pdfPage, dpi: dpi)
+    }
+
+    /// The text a viewer extracts from a page (search, copy).
+    static func pageText(of url: URL, page: Int = 1) -> String {
+        PDFDocument(url: url)?.page(at: page - 1)?.string ?? ""
     }
 
     @discardableResult

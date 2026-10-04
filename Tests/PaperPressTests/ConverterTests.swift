@@ -9,6 +9,13 @@ final class ConverterTests: FixtureTestCase {
         return s
     }
 
+    /// No OCR, and any size accepted: for tests about what a page becomes.
+    private var anySaving: Converter.Settings {
+        var s = noOCR
+        s.minSavingFraction = -1
+        return s
+    }
+
     func test_convert_scannedTextPDF_producesSmallerG4PDF() throws {
         // Arrange
         let page = Fixtures.textPage(width: 2480, height: 3508, noise: true)
@@ -139,8 +146,7 @@ final class ConverterTests: FixtureTestCase {
     func test_convert_demotedTextPage_usesGray4ByDefault() throws {
         // Arrange
         let out = dir.appendingPathComponent("out/tiny.pdf")
-        var settings = noOCR
-        settings.minSavingFraction = -1
+        let settings = anySaving
 
         // Act
         let result = try Converter.convert(
@@ -165,8 +171,7 @@ final class ConverterTests: FixtureTestCase {
         )
         let out = dir.appendingPathComponent("out/crisp75.pdf")
         let report = try PDFInspector.inspect(src)
-        var settings = noOCR
-        settings.minSavingFraction = -1
+        let settings = anySaving
 
         // Act
         let result = try Converter.convert(report: report, to: out, settings: settings)
@@ -178,11 +183,44 @@ final class ConverterTests: FixtureTestCase {
         )
     }
 
+    func test_convert_damageDemotedPage_keepsTheTextResolution() throws {
+        // Arrange — a 300 dpi text scan forced to stay grayscale
+        let page = Fixtures.textPage(width: 2480, height: 3508, noise: true)
+        let src = Fixtures.write(
+            Fixtures.scannedPDF(pages: [page], dpi: 300), to: dir, name: "fine.pdf"
+        )
+        let out = dir.appendingPathComponent("out/fine.pdf")
+        var settings = anySaving
+        settings.maxG4Damage = -1
+
+        // Act
+        let result = try Converter.convert(
+            report: try PDFInspector.inspect(src), to: out, settings: settings)
+
+        // Assert — 4-bit at the full 300 dpi, not cut to the photo cap
+        XCTAssertEqual(result.outcome, .converted([.gray4]))
+        XCTAssertNotNil(
+            try Data(contentsOf: out).range(of: Data("/Width 2480".utf8)),
+            "a page kept grayscale for its fine detail should keep its resolution")
+    }
+
+    func test_convert_grayscaleTextPage_hasWhitePaper() throws {
+        // Arrange — the low-res scan's paper is 250, not white
+        let out = dir.appendingPathComponent("out/tiny.pdf")
+        let settings = anySaving
+
+        // Act
+        _ = try Converter.convert(report: try lowResTextReport(), to: out, settings: settings)
+
+        // Assert — paper comes out white
+        let counts = Pipeline.histogram(try Fixtures.rendered(out, dpi: 75))
+        XCTAssertEqual(counts.indices.max { counts[$0] < counts[$1] }, 255, "paper should be white")
+    }
+
     func test_convert_demotedTextPage_respectsJPEGSetting() throws {
         // Arrange
         let out = dir.appendingPathComponent("out/tiny.pdf")
-        var settings = noOCR
-        settings.minSavingFraction = -1
+        var settings = anySaving
         settings.demotedTextFormat = .jpeg
 
         // Act
@@ -207,8 +245,7 @@ final class ConverterTests: FixtureTestCase {
         )
         let out = dir.appendingPathComponent("out/adequate.pdf")
         let report = try PDFInspector.inspect(src)
-        var settings = noOCR
-        settings.minSavingFraction = -1
+        var settings = anySaving
         settings.maxG4Damage = 0.01
         settings.dpiCap = 150  // skip the 2x upsample; the arm under test is unaffected
 
@@ -232,8 +269,7 @@ final class ConverterTests: FixtureTestCase {
         )
         let out = dir.appendingPathComponent("out/mixed.pdf")
         let report = try PDFInspector.inspect(src)
-        var settings = noOCR
-        settings.minSavingFraction = -1
+        let settings = anySaving
 
         // Act
         let result = try Converter.convert(report: report, to: out, settings: settings)
@@ -266,6 +302,179 @@ final class ConverterTests: FixtureTestCase {
             try FileManager.default.attributesOfItem(atPath: out.path)[.modificationDate]
             as? Date
         XCTAssertEqual(outDate, past)
+    }
+
+    // MARK: Destinations
+
+    func test_convert_refusesToReplaceAFileItDidNotWrite() throws {
+        // Arrange — the output path already holds someone else's file
+        let page = Fixtures.textPage(width: 1240, height: 1754, noise: true)
+        let src = Fixtures.write(
+            Fixtures.scannedPDF(pages: [page], dpi: 150), to: dir, name: "scan.pdf"
+        )
+        let out = Fixtures.write(
+            Data("keep me".utf8), to: dir.appendingPathComponent("out"), name: "scan.pdf")
+        let report = try PDFInspector.inspect(src)
+
+        // Act / Assert
+        XCTAssertThrowsError(try Converter.convert(report: report, to: out, settings: noOCR)) {
+            guard case .destinationExists = $0 as? PressError else {
+                return XCTFail("expected destinationExists, got \($0)")
+            }
+        }
+        XCTAssertEqual(try Data(contentsOf: out), Data("keep me".utf8), "file should be untouched")
+    }
+
+    func test_convert_replacesItsOwnEarlierOutput() throws {
+        // Arrange — a first run already wrote the output
+        let page = Fixtures.textPage(width: 2480, height: 3508, noise: true)
+        let src = Fixtures.write(
+            Fixtures.scannedPDF(pages: [page], dpi: 300), to: dir, name: "scan.pdf"
+        )
+        let out = dir.appendingPathComponent("out/scan.pdf")
+        let report = try PDFInspector.inspect(src)
+        _ = try Converter.convert(report: report, to: out, settings: noOCR)
+
+        // Act — run again into the same folder
+        let again = try Converter.convert(report: report, to: out, settings: noOCR)
+
+        // Assert
+        XCTAssertTrue(again.converted, "a re-run should replace its own output")
+    }
+
+    func test_convert_passThroughOverAnIdenticalCopy_leavesItInPlace() throws {
+        // Arrange — an earlier run already copied this file through
+        let src = Fixtures.write(Fixtures.bornDigitalPDF(), to: dir, name: "digital.pdf")
+        let out = dir.appendingPathComponent("out/digital.pdf")
+        let report = try PDFInspector.inspect(src)
+        _ = try Converter.convert(report: report, to: out, settings: noOCR)
+        let before =
+            try out.resourceValues(forKeys: [.fileResourceIdentifierKey])
+            .fileResourceIdentifier as? NSObject
+
+        // Act
+        let result = try Converter.convert(report: report, to: out, settings: noOCR)
+
+        // Assert — reported as copied, and the same file still there
+        XCTAssertEqual(result.outcome, .copied(.passThrough))
+        let after =
+            try out.resourceValues(forKeys: [.fileResourceIdentifierKey])
+            .fileResourceIdentifier as? NSObject
+        XCTAssertEqual(after, before, "an identical copy should not be rewritten")
+    }
+
+    func test_convert_ontoItsSourceSpelledInAnotherCase_throws() throws {
+        // Arrange — on a case-insensitive volume LOOSE.PDF is loose.pdf
+        let isCaseSensitive = try dir.resourceValues(
+            forKeys: [.volumeSupportsCaseSensitiveNamesKey]
+        ).volumeSupportsCaseSensitiveNames
+        try XCTSkipIf(isCaseSensitive != false, "needs a case-insensitive volume")
+        let data = Fixtures.bornDigitalPDF()
+        let src = Fixtures.write(data, to: dir, name: "loose.pdf")
+        let report = try PDFInspector.inspect(src)
+
+        // Act / Assert
+        XCTAssertThrowsError(
+            try Converter.convert(
+                report: report, to: dir.appendingPathComponent("LOOSE.PDF"), settings: noOCR)
+        )
+        XCTAssertEqual(try Data(contentsOf: src), data)
+    }
+
+    // MARK: Page handling
+
+    func test_convert_croppedPage_comesOutAtTheCropSize() throws {
+        // Arrange — an A4 scan cropped in a viewer to 300 × 400 pt
+        let page = Fixtures.textPage(width: 2480, height: 3508, noise: true)
+        let full = Fixtures.write(
+            Fixtures.scannedPDF(pages: [page], dpi: 300), to: dir, name: "full.pdf"
+        )
+        let cropped = Fixtures.edited(full, as: "cropped.pdf") {
+            $0.setBounds(CGRect(x: 100, y: 100, width: 300, height: 400), for: .cropBox)
+        }
+        let out = dir.appendingPathComponent("out/cropped.pdf")
+        let settings = anySaving
+
+        // Act
+        _ = try Converter.convert(
+            report: try PDFInspector.inspect(cropped), to: out, settings: settings)
+
+        // Assert — the hidden part stays hidden: the page is the crop
+        let media = try XCTUnwrap(CGPDFDocument(out as CFURL)?.page(at: 1)).getBoxRect(.mediaBox)
+        XCTAssertEqual(media.width, 300, accuracy: 1)
+        XCTAssertEqual(media.height, 400, accuracy: 1)
+    }
+
+    func test_convert_mixedFile_keepsVectorPagesAsTheyWere() throws {
+        // Arrange — a real-text cover sheet followed by a scanned page
+        let scan = Fixtures.textPage(width: 2480, height: 3508, noise: true)
+        let src = Fixtures.write(
+            Fixtures.drawnPDF([.text("Vector cover sheet"), .scan(scan, dpi: 300)]),
+            to: dir, name: "mixed.pdf"
+        )
+        let report = try PDFInspector.inspect(src)
+        XCTAssertEqual(report.verdict, .convert, "fixture sanity")
+        let out = dir.appendingPathComponent("out/mixed.pdf")
+        let settings = anySaving
+
+        // Act
+        let result = try Converter.convert(report: report, to: out, settings: settings)
+
+        // Assert — page 1 copied, not rasterised: its text is still text,
+        // and it draws exactly as the source did
+        XCTAssertEqual(result.outcome, .converted([.original, .g4]))
+        XCTAssertTrue(Fixtures.pageText(of: out).contains("Vector cover sheet"))
+        XCTAssertFalse(
+            try XCTUnwrap(Fixtures.contentStream(of: out)).contains("/Im0"),
+            "page 1 should carry no raster image"
+        )
+        let before = try Fixtures.rendered(src, dpi: 72)
+        let after = try Fixtures.rendered(out, dpi: 72)
+        XCTAssertEqual(after.pixels, before.pixels, "copied page should render identically")
+    }
+
+    func test_convert_fileChangedSinceAnalysis_throwsAndWritesNothing() throws {
+        // Arrange — analysed as two pages, then replaced by one
+        let page = Fixtures.textPage(width: 1240, height: 1754, noise: true)
+        let src = Fixtures.write(
+            Fixtures.scannedPDF(pages: [page, page], dpi: 150), to: dir, name: "scan.pdf"
+        )
+        let report = try PDFInspector.inspect(src)
+        Fixtures.write(Fixtures.scannedPDF(pages: [page], dpi: 150), to: dir, name: "scan.pdf")
+        let out = dir.appendingPathComponent("out/scan.pdf")
+
+        // Act / Assert
+        XCTAssertThrowsError(try Converter.convert(report: report, to: out, settings: noOCR)) {
+            guard case .changedSinceAnalysis = $0 as? PressError else {
+                return XCTFail("expected changedSinceAnalysis, got \($0)")
+            }
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: out.path))
+    }
+
+    func test_convert_cancelled_stopsAndWritesNothing() async throws {
+        // Arrange
+        let page = Fixtures.textPage(width: 1240, height: 1754, noise: true)
+        let src = Fixtures.write(
+            Fixtures.scannedPDF(pages: [page, page], dpi: 150), to: dir, name: "scan.pdf"
+        )
+        let report = try PDFInspector.inspect(src)
+        let out = dir.appendingPathComponent("out/scan.pdf")
+        let settings = noOCR
+
+        // Act — a conversion whose task is already cancelled
+        let task = Task.detached {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try Converter.convert(report: report, to: out, settings: settings)
+        }
+
+        // Assert
+        do {
+            _ = try await task.value
+            XCTFail("a cancelled conversion should throw")
+        } catch is CancellationError {
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: out.path))
     }
 }
 
@@ -333,6 +542,19 @@ final class FolderScannerItemsTests: FixtureTestCase {
 
         // Assert
         XCTAssertTrue(items.isEmpty)
+    }
+
+    func test_items_namesDifferingOnlyInCase_getNumberedSuffix() {
+        // Arrange — one file on disk on a default (case-insensitive) volume
+        let one = touch("one/Scan.pdf")
+        let two = touch("two/scan.pdf")
+
+        // Act
+        let items = FolderScanner.items(for: [one, two])
+
+        // Assert — distinct output paths whatever the volume
+        let keys = Set(items.map { $0.relativePath.lowercased() })
+        XCTAssertEqual(keys.count, 2, "got \(items.map(\.relativePath))")
     }
 
     func test_items_mergingExistingSource_isDeduped() {

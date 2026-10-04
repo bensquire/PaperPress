@@ -30,4 +30,23 @@ final class PDFRenderTests: FixtureTestCase {
         }
         XCTAssertLessThan(leftmostInk, gray.width / 10)
     }
+
+    func test_gray_croppedPage_rendersOnlyTheVisibleArea() throws {
+        // Arrange — the page's only ink sits outside a 100 × 100 pt crop
+        let full = Fixtures.write(
+            Fixtures.scannedPDF(pages: [Fixtures.blockPage()], dpi: 72), to: dir, name: "p.pdf"
+        )
+        let cropped = Fixtures.edited(full, as: "c.pdf") {
+            $0.setBounds(CGRect(x: 0, y: 0, width: 100, height: 100), for: .cropBox)
+        }
+        let doc = try XCTUnwrap(CGPDFDocument(cropped as CFURL))
+
+        // Act
+        let gray = try PDFRender.gray(page: try XCTUnwrap(doc.page(at: 1)), dpi: 72)
+
+        // Assert — crop-sized, and none of the hidden ink
+        XCTAssertEqual(gray.width, 100)
+        XCTAssertEqual(gray.height, 100)
+        XCTAssertTrue(gray.pixels.allSatisfy { $0 > 200 }, "hidden ink should not render")
+    }
 }

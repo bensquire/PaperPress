@@ -33,6 +33,24 @@ public extension Pipeline.GrayImage {
         )
     }
 
+    /// Paper to white and ink to black: a levels adjustment from the page's
+    /// own ink and paper (`levels`, or measured here), or the page unchanged
+    /// when it has too little contrast to stretch. For pages the classifier
+    /// calls text — it alone judges paper and ink: a photograph's light and
+    /// dark halves aren't, and stretching them would clip it.
+    func levelled(_ levels: Binarize.Levels? = nil) -> Pipeline.GrayImage {
+        guard let (ink, paper) = levels ?? Binarize.levels(self) else { return self }
+        let scale = 255 / (paper - ink)
+        let lut = (0...255).map { UInt8(clamping: Int(((Double($0) - ink) * scale).rounded())) }
+        var out = self
+        lut.withUnsafeBufferPointer { table in
+            out.pixels.withUnsafeMutableBufferPointer { px in
+                for i in px.indices { px[i] = table[Int(px[i])] }
+            }
+        }
+        return out
+    }
+
     func cropped(_ c: Pipeline.Crop) -> Pipeline.GrayImage {
         let cw = c.x1 - c.x0, ch = c.y1 - c.y0
         var out = [UInt8](repeating: 0, count: cw * ch)
@@ -65,6 +83,10 @@ public enum ImageEncode {
                 kCGImagePropertyDPIHeight: dpi,
             ]
         )
+    }
+
+    public static func png(_ image: CGImage) -> Data? {
+        encode(image, uti: UTType.png.identifier as CFString, properties: [:])
     }
 
     static func encode(

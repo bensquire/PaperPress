@@ -37,14 +37,14 @@ struct QuickLookNavigation: ViewModifier {
     func body(content: Content) -> some View {
         content
             .quickLookPreview($previewItem, in: urls)
-            .onChange(of: selection) { newSelection in
+            .onChange(of: selection) { _, newSelection in
                 if previewItem != nil, let id = newSelection,
                     let i = ids.firstIndex(of: id)
                 {
                     previewItem = urls[i]
                 }
             }
-            .onChange(of: previewItem) { newItem in
+            .onChange(of: previewItem) { _, newItem in
                 guard let newItem, let i = urls.firstIndex(of: newItem)
                 else { return }
                 selection = ids[i]

@@ -29,7 +29,7 @@ public enum G4 {
         return data
     }
 
-    public struct Stream {
+    public struct Stream: Sendable {
         public let data: Data  // raw G4 codestream
         public let width: Int
         public let height: Int

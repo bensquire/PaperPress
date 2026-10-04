@@ -17,6 +17,13 @@ public enum PageClassifier {
     /// gradient.) A borderline page falls to JPEG, the side that never
     /// destroys content.
     static let paperFractionThreshold = 0.6
+    /// Paper is light: a histogram peak below this is continuous tone, an
+    /// inverted scan, or paper too dim to trust, and goes to JPEG. Scanned
+    /// paper measures 240+; a low-contrast aerial photograph peaked near 140
+    /// and passed as text at the old floor of 128, then binarised into
+    /// damage and came out posterised. 170 leaves room for dim and yellowed
+    /// paper.
+    static let minPaperLevel = 170
     /// "Near the paper peak" = within this many gray levels of the mode.
     static let paperBand = 20
     /// Maximum fraction of the page allowed to be smooth midtone before
@@ -38,9 +45,7 @@ public enum PageClassifier {
             }
         }
         let peak = bandMass.indices.max(by: { bandMass[$0] < bandMass[$1] })!
-        // Paper must be light; a dark peak means continuous tone (or an
-        // inverted/washed scan, which 1-bit would mangle anyway).
-        guard peak >= 128 else { return .photo }
+        guard peak >= minPaperLevel else { return .photo }
         guard bandMass[peak] / total >= paperFractionThreshold else { return .photo }
 
         // Histogram shape isn't enough: gamma-skewed gradients can pack

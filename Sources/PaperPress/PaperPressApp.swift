@@ -31,9 +31,10 @@ struct PaperPressApp: App {
         }
         .commands {
             CommandGroup(after: .newItem) {
+                // Always open: a new batch is put together while queued
+                // ones convert.
                 Button("Open…") { model.chooseSource() }
                     .keyboardShortcut("o", modifiers: .command)
-                    .disabled(model.busy)
                 Button("Convert…") { model.chooseOutputAndConvert() }
                     .keyboardShortcut(.return, modifiers: .command)
                     .disabled(!model.canConvert)
