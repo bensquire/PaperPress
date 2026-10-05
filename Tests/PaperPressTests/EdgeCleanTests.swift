@@ -54,7 +54,7 @@ final class EdgeCleanTests: XCTestCase {
 }
 
 final class EdgeCleanConverterTests: FixtureTestCase {
-    func test_convert_lowResTextPageWithEdgeBand_isCleanedInOutput() throws {
+    func test_convert_lowResTextPageWithEdgeBand_isCleanedInOutput() async throws {
         // Arrange — a 75 dpi text page with a black scan band down the
         // left edge: the resolution gate demotes it to grayscale, and the
         // band must still be cleaned on that path
@@ -70,7 +70,7 @@ final class EdgeCleanConverterTests: FixtureTestCase {
         settings.minSavingFraction = -1
 
         // Act
-        _ = try Converter.convert(report: report, to: out, settings: settings)
+        _ = try await Converter.convert(report: report, to: out, settings: settings)
 
         // Assert — the written page's left edge is paper, not band
         let doc = try XCTUnwrap(CGPDFDocument(out as CFURL))

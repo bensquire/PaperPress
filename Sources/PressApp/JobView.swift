@@ -15,7 +15,7 @@ struct JobView: View {
             header
             if job.state == .converting {
                 ProgressView(value: job.fraction)
-                    .padding(.horizontal, 12)
+                    .padding(.horizontal, 16)
                     .padding(.bottom, 8)
             }
             Divider()
@@ -64,7 +64,8 @@ struct JobView: View {
                 actionButton(action)
             }
         }
-        .padding(12)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
     }
 
     @ViewBuilder

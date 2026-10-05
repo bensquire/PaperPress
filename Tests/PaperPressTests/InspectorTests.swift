@@ -84,7 +84,7 @@ final class PDFInspectorTests: FixtureTestCase {
             report.estimatedBytes, PDFInspector.estimatedPageBytes(report.pages[0]))
     }
 
-    func test_inspect_textPage_isEstimatedFromItsInk() throws {
+    func test_inspect_textPage_isEstimatedFromItsInk() async throws {
         // Arrange — a dense page of small type, scanned at 150 dpi
         let url = Fixtures.write(
             Fixtures.scannedPDF(pages: [Fixtures.renderedTextPage(fontSize: 9, ink: 0.1)], dpi: 150),
@@ -93,7 +93,7 @@ final class PDFInspectorTests: FixtureTestCase {
 
         // Act
         let report = try PDFInspector.inspect(url)
-        let converted = try Converter.convert(report: report, to: out)
+        let converted = try await Converter.convert(report: report, to: out)
 
         // Assert — near what converting writes (a flat rate a pixel was
         // well under it)
@@ -140,22 +140,22 @@ final class PDFInspectorTests: FixtureTestCase {
     /// Convert the canonical low-res scan and return the written output.
     private func convertOwnOutput(
         format: Converter.DemotedTextFormat = .gray4
-    ) throws -> URL {
+    ) async throws -> URL {
         let src = Fixtures.write(Fixtures.lowResTextScanPDF(), to: dir, name: "src.pdf")
         let out = dir.appendingPathComponent("out/src.pdf")
         var settings = Converter.Settings()
         settings.ocr = false
         settings.minSavingFraction = -1
         settings.demotedTextFormat = format
-        _ = try Converter.convert(
+        _ = try await Converter.convert(
             report: try PDFInspector.inspect(src), to: out, settings: settings
         )
         return out
     }
 
-    func test_inspect_ownConvertedOutput_passesThroughAsAlreadyProcessed() throws {
+    func test_inspect_ownConvertedOutput_passesThroughAsAlreadyProcessed() async throws {
         // Arrange — convert a low-res text scan (demotes to 4-bit gray)
-        let out = try convertOwnOutput()
+        let out = try await convertOwnOutput()
 
         // Act — re-analyse the output, as a second app run would
         let report = try PDFInspector.inspect(out)
@@ -164,9 +164,9 @@ final class PDFInspectorTests: FixtureTestCase {
         XCTAssertEqual(report.verdict, .passThrough(.alreadyProcessed))
     }
 
-    func test_inspect_ownJPEGOutput_passesThroughAsAlreadyProcessed() throws {
+    func test_inspect_ownJPEGOutput_passesThroughAsAlreadyProcessed() async throws {
         // Arrange — same, with the JPEG demoted-format setting
-        let out = try convertOwnOutput(format: .jpeg)
+        let out = try await convertOwnOutput(format: .jpeg)
 
         // Act
         let report = try PDFInspector.inspect(out)

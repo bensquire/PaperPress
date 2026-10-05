@@ -10,41 +10,41 @@ public enum OCR {
         public let box: CGRect
     }
 
-    /// Recognise text on a 1-bit page (works on the packed page directly).
-    public static func recognize(_ page: Pipeline.ProcessedPage) throws -> [Word] {
-        guard let img = page.cgImage else {
-            throw ScanError.scanFailed("Cannot build image for OCR")
-        }
-        return try recognize(cgImage: img)
+    /// Recognise text on any image, one entry per word, each with its own
+    /// box: a whole line stretched over its box drifts from the ink.
+    ///
+    /// Vision's document reader rather than its line reader
+    /// (VNRecognizeTextRequest): on a 150 dpi letter that read two lines as
+    /// one garbled one ("«State» and other states have the primary
+    /// responsibility…" came out "-state and the ste have the primary
+    /// responsity…", the line above it lost) at 150, 200 and 300 dpi alike,
+    /// where this reads both, in the same time, and boxes the words itself.
+    public static func recognize(cgImage img: CGImage) async throws -> [Word] {
+        var request = RecognizeDocumentsRequest()
+        request.textRecognitionOptions.maximumCandidateCount = 1
+        return try await request.perform(on: img).flatMap { words(in: $0.document.text) }
     }
 
-    /// Recognise text on any image, one entry per word.
-    public static func recognize(cgImage img: CGImage) throws -> [Word] {
-        let request = VNRecognizeTextRequest()
-        request.recognitionLevel = .accurate
-        request.usesLanguageCorrection = true
-        // recognitionLanguages defaults to ["en_US"], but that doesn't
-        // confine recognition: German, French, Spanish and Russian lines
-        // read identically with automaticallyDetectsLanguage on or off
-        // (macOS 26, full size and at 0.45x), and detection cost ~3% per
-        // page — so it stays off.
-        try VNImageRequestHandler(cgImage: img).perform([request])
-        return (request.results ?? []).flatMap(words(in:))
-    }
-
-    /// Each whitespace-separated word with its own box
-    /// (`boundingBox(for:)`, /documentation/vision/vnrecognizedtext), since
-    /// a whole line stretched over its box drifts from the ink. If Vision
-    /// can't place every word, the line goes in as one.
-    private static func words(in line: VNRecognizedTextObservation) -> [Word] {
-        guard let candidate = line.topCandidates(1).first else { return [] }
-        let text = candidate.string
-        var words: [Word] = []
-        for word in text.split(whereSeparator: \.isWhitespace) {
-            guard let box = try? candidate.boundingBox(for: word.startIndex..<word.endIndex)?.boundingBox
-            else { return [Word(text: text, box: line.boundingBox)] }
-            words.append(Word(text: String(word), box: box))
+    /// Each line's words, or the line whole where Vision doesn't split it into
+    /// words: Chinese, Japanese, Korean and Thai
+    /// (/documentation/vision/documentobservation/container/text-swift.struct/words),
+    /// whose lines a page mixing them with English had otherwise lost.
+    private static func words(in text: DocumentObservation.Container.Text) -> [Word] {
+        let lines = text.lines
+        var byLine = [[RecognizedTextObservation]](repeating: [], count: lines.count)
+        for word in text.words ?? [] {
+            let box = word.boundingBox.cgRect
+            let middle = CGPoint(x: box.midX, y: box.midY)
+            if let i = lines.firstIndex(where: { $0.boundingBox.cgRect.contains(middle) }) {
+                byLine[i].append(word)
+            }
         }
-        return words
+        return zip(lines, byLine).flatMap { line, words in
+            (words.isEmpty ? [line] : words).compactMap { observation in
+                observation.topCandidates(1).first.map {
+                    Word(text: $0.string, box: observation.boundingBox.cgRect)
+                }
+            }
+        }
     }
 }

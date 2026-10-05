@@ -190,6 +190,8 @@ public final class AppModel: ObservableObject {
     /// Assistants' batches being analysed.
     var jobAnalyses: [UUID: Task<Void, Never>] = [:]
     var jobWatchers: [UUID: JobWatcher] = [:]
+    /// Where assistants save files that aren't on this Mac (Inbox).
+    var inbox = Inbox.folder
 
     public init(
         initialFolder: URL? = nil, defaults: UserDefaults = .standard,
@@ -244,6 +246,16 @@ public final class AppModel: ObservableObject {
     /// What the window batch is called in the queue.
     var draftTitle: String {
         sourceURLs.isEmpty ? "New Batch" : JobRequest.name(for: sourceURLs)
+    }
+
+    /// Where the window batch has got to, under its name.
+    var draftDetail: String {
+        switch phase {
+        case .idle: "Drop PDFs to start"
+        case let .analysing(done, of): "Analysing \(done) of \(of)"
+        case .review:
+            "\(rows.count) PDF\(rows.count == 1 ? "" : "s") · \(rows.filter(\.included).count) to convert"
+        }
     }
 
     public func chooseSource() {
@@ -367,7 +379,7 @@ public final class AppModel: ObservableObject {
     /// folder inside a source tree that mirrors part of it.
     @discardableResult
     func convertIfSafe(to out: URL) -> Bool {
-        if let problem = Self.overwriteProblem(rows, into: out) {
+        if let problem = outputProblem(rows, into: out) {
             errorText = problem
             return false
         }

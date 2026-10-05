@@ -96,10 +96,9 @@ struct JobWatcher {
 }
 
 /// The queue: every conversion goes through it, from the window and from
-/// assistants alike. One job converts at a time — Vision runs one
-/// recognition at a time however many are asked of it (8 pages: 7.61 s
-/// serial, 7.56 s concurrent on 10 cores), so two batches at once would
-/// each take twice as long — and the window stays free to put the next
+/// assistants alike. One job converts at a time — its files already
+/// convert side by side (see convert(_:_:positions:settings:)), so a
+/// second batch would mostly add memory — and the window stays free to put the next
 /// batch together meanwhile.
 extension AppModel {
     func job(_ id: UUID) -> Job? {
@@ -113,9 +112,13 @@ extension AppModel {
 
     /// The queue's one admission rule: no output may land on one of the
     /// batch's own originals (`files` is the whole batch, ticked or not:
-    /// every one is an original). Checked whenever a batch joins the queue —
-    /// including on approval, which can tick more files.
-    static func overwriteProblem(_ files: [FileRow], into output: URL) -> String? {
+    /// every one is an original), nor in the inbox, which is emptied.
+    /// Checked whenever a batch joins the queue — including on approval,
+    /// which can tick more files.
+    func outputProblem(_ files: [FileRow], into output: URL) -> String? {
+        if Inbox.covers(output, in: inbox) {
+            return "PaperPress empties its inbox, so the output can't go there; choose another folder."
+        }
         guard
             let clash = OutputPlan.firstCollision(
                 files.filter(\.participated).map(\.item), sources: files.map(\.item), in: output)
@@ -153,7 +156,7 @@ extension AppModel {
     /// ticked would overwrite an original, which it says instead.
     func approve(_ id: UUID) {
         guard let job = job(id), job.state == .awaitingApproval else { return }
-        if let problem = Self.overwriteProblem(job.files, into: job.request.output) {
+        if let problem = outputProblem(job.files, into: job.request.output) {
             return updateJob(id) { $0.failure = problem }
         }
         updateJob(id) {
@@ -232,9 +235,9 @@ extension AppModel {
         _ jobID: UUID, _ work: [Work], positions: [FileRow.ID: Int], settings: Converter.Settings
     ) async {
         // Files are independent (distinct output paths), so a few convert
-        // concurrently. Vision serialises recognition, so with OCR on a
-        // second file only overlaps its CPU stages with the first's OCR, and
-        // more would just hold page buffers.
+        // concurrently. With OCR on, two: Vision reads two at once (two
+        // copies of a 3-page letter took 2.5 s, against 2.2 s for one), and
+        // each more holds another 75–90 MB of pages for less (three: 3.0 s).
         let cores = ProcessInfo.processInfo.activeProcessorCount
         let width = settings.ocr ? 2 : min(4, max(1, cores - 2))
         typealias Outcome = (FileRow.ID, Result<Converter.FileResult, any Error>)
@@ -265,6 +268,10 @@ extension AppModel {
             }
         }
         guard !Task.isCancelled else { return }
+        // Files saved into the inbox for this batch have done their job.
+        if let job = job(jobID) {
+            Inbox.remove(job.files.filter { $0.result != nil }.map(\.item.url), from: inbox)
+        }
         updateJob(jobID) { $0.state = .finished }
     }
 
@@ -272,8 +279,11 @@ extension AppModel {
     private nonisolated static func convert(
         _ work: Work, settings: Converter.Settings
     ) async -> Result<Converter.FileResult, any Error> {
-        Result {
-            try Converter.convert(report: work.report, to: work.destination, settings: settings)
+        do {
+            return .success(
+                try await Converter.convert(report: work.report, to: work.destination, settings: settings))
+        } catch {
+            return .failure(error)
         }
     }
 
@@ -318,7 +328,7 @@ extension AppModel {
             }
         }
         guard finished, let analysed = job(id) else { return }
-        if let problem = Self.overwriteProblem(analysed.files, into: request.output) {
+        if let problem = outputProblem(analysed.files, into: request.output) {
             return finishAnalysis(id) {
                 $0.state = .failed
                 $0.failure = problem
@@ -357,6 +367,10 @@ extension AppModel: JobHandling {
         }
         guard request.output.isFileURL else {
             throw JobRefusal("The output must be a folder on this Mac.")
+        }
+        // Refused now if it can be without the files, which come with analysis.
+        if let problem = outputProblem([], into: request.output) {
+            throw JobRefusal(problem)
         }
         guard job(request.id) == nil else {
             throw JobRefusal("Job \(request.id.uuidString) is already queued.")

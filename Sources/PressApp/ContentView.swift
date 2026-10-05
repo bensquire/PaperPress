@@ -54,11 +54,17 @@ public struct ContentView: View {
 /// The batch being put together, then every job this session.
 struct QueueList: View {
     @EnvironmentObject var model: AppModel
+    /// Not focused when the window opens: a focused list draws its selection
+    /// in the accent colour, and the selected batch row read as a button. A
+    /// click focuses it as usual.
+    @FocusState private var focused: Bool
 
     var body: some View {
         List(selection: $model.selection) {
-            Label(model.draftTitle, systemImage: "tray.and.arrow.down")
-                .tag(AppModel.Selection.draft)
+            Section("Current Batch") {
+                DraftRow()
+                    .tag(AppModel.Selection.draft)
+            }
             if !model.jobs.isEmpty {
                 Section("Queue") {
                     ForEach(model.jobs) { job in
@@ -69,6 +75,9 @@ struct QueueList: View {
                 }
             }
         }
+        .focused($focused)
+        // After the window has made the list its first responder.
+        .onAppear { DispatchQueue.main.async { focused = false } }
         .safeAreaInset(edge: .bottom) {
             HStack {
                 Text(summary)
@@ -91,6 +100,8 @@ struct QueueList: View {
                         .help("Hold batches that haven't started")
                 }
             }
+            // Ends where the window's rounded corner does (see StatusBar).
+            .containerCornerOffset(.horizontal, sizeToFit: true)
             .padding(10)
         }
     }
@@ -115,6 +126,26 @@ struct QueueList: View {
 }
 
 /// A job in the queue: its name, where it came from and how it is going.
+/// The window's own batch, before it joins the queue.
+struct DraftRow: View {
+    @EnvironmentObject var model: AppModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Label {
+                Text(model.draftTitle).lineLimit(1)
+            } icon: {
+                Image(systemName: "tray.and.arrow.down")
+            }
+            Text(model.draftDetail)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .padding(.vertical, 2)
+    }
+}
+
 struct JobRow: View {
     let job: Job
 
@@ -213,8 +244,13 @@ struct StatusBar: View {
             }
         }
         .font(.callout)
-        .padding(.horizontal, 24)
-        .padding(.vertical, 6)
+        // Clear of the window's rounded corners, so at a corner the text
+        // starts and ends where the curve does (the offset is only what's left
+        // of the corner inside the padding;
+        // /documentation/swiftui/view/containercorneroffset(_:sizetofit:)).
+        .containerCornerOffset(.horizontal, sizeToFit: true)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 9)
         .background(.bar)
     }
 }

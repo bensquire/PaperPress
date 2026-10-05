@@ -1,3 +1,4 @@
+import CoreText
 import Foundation
 
 /// Minimal PDF writer. Pages are CCITT G4 streams (1-bit documents,
@@ -17,7 +18,7 @@ public enum PDFWriter {
     public struct Page: Sendable {
         public let content: Content
         public let dpi: Int
-        public let ocrWords: [OCR.Word]
+        public var ocrWords: [OCR.Word]
         /// Page size override in points; nil = natural image size.
         public var pageSizePt: (w: Double, h: Double)?
         /// Where the content sat on the scanner bed (points, from top-left).
@@ -90,7 +91,8 @@ public enum PDFWriter {
         var table = ObjectTable()
         let catalogID = table.reserve()
         let pagesID = table.reserve()
-        let fontID = table.reserve()
+        // Only a file with an OCR layer carries the font, /Widths and all.
+        let fontID = pages.contains { !$0.ocrWords.isEmpty } ? table.reserve() : nil
         // Objects copied from source pages, numbered on first use so
         // pages sharing a font or image share the one object.
         var copiedIDs: [CopiedPage.Key: Int] = [:]
@@ -141,10 +143,10 @@ public enum PDFWriter {
                 // bytes, so each word moves from the last (Td) by tenths
                 // of a point, and scales in whole percent.
                 var last = (x: 0.0, y: 0.0)
-                for word in page.ocrWords {
-                    let (text, glyphs) = winAnsiLiteral(word.text)
-                    guard glyphs > 0 else { continue }
-                    let boxW = word.box.width * ptW
+                let words = page.ocrWords
+                for (i, word) in words.enumerated() {
+                    let (text, width) = winAnsiLiteral(word.text)
+                    guard width > 0 else { continue }
                     let size = tenth(max(4, word.box.height * ptH))
                     // PDFKit highlights Helvetica from 0.23 em below its
                     // baseline to 0.77 above, so on a baseline that far up
@@ -152,12 +154,22 @@ public enum PDFWriter {
                     // the ink (on the box's floor, it hung a quarter below).
                     let x = tenth(ox + word.box.minX * ptW)
                     let y = tenth(oy + word.box.minY * ptH + size * 0.23)
-                    // Horizontal scale so the string spans the detected box.
-                    let nominal = Double(glyphs) * size * 0.5
-                    let tz = nominal > 0 ? boxW / nominal * 100 : 100
+                    // Scaled to span the box, but ending a quarter of the font
+                    // size short of the next word on the line: readers that
+                    // ignore spaces (pdftotext -raw) break words only at a gap
+                    // of about a fifth, and Vision's boxes nearly touch (1.9 pt
+                    // apart at 15 pt on a letter, whose lines read as one word).
+                    var span = word.box.width * ptW
+                    if let next = words.dropFirst(i + 1).first,
+                        abs(next.box.midY - word.box.midY) < word.box.height / 2,
+                        next.box.minX > word.box.minX
+                    {
+                        span = max(span / 2, min(span, (next.box.minX - word.box.minX) * ptW - size * 0.25))
+                    }
+                    let tz = span / (width * size) * 100
                     content += "\n/F1 \(real(size)) Tf \(Int(min(500, max(20, tz)).rounded())) Tz"
-                    // The space after the word, past its box, keeps a reader
-                    // from running neighbours together.
+                    // And a space after the word, for readers that go by
+                    // characters.
                     content += " \(real(tenth(x - last.x))) \(real(tenth(y - last.y))) Td (\(text) ) Tj"
                     last = (x, y)
                 }
@@ -170,7 +182,7 @@ public enum PDFWriter {
             cobj.append(Data("\nendstream".utf8))
             let contentID = table.add(cobj)
 
-            let fontRes = page.ocrWords.isEmpty ? "" : "/Font<</F1 \(fontID) 0 R>>"
+            let fontRes = page.ocrWords.isEmpty ? "" : fontID.map { "/Font<</F1 \($0) 0 R>>" } ?? ""
             pageIDs.append(
                 table.add(
                     Data(
@@ -186,12 +198,9 @@ public enum PDFWriter {
         table.set(catalogID, Data("<</Type/Catalog/Pages \(pagesID) 0 R>>".utf8))
         let kids = pageIDs.map { "\($0) 0 R" }.joined(separator: " ")
         table.set(pagesID, Data("<</Type/Pages/Kids[\(kids)]/Count \(pageIDs.count)>>".utf8))
-        // WinAnsiEncoding so the OCR layer carries Latin-1 text (accents,
-        // curly quotes, dashes), not just ASCII.
-        table.set(
-            fontID,
-            Data("<</Type/Font/Subtype/Type1/BaseFont/Helvetica/Encoding/WinAnsiEncoding>>".utf8)
-        )
+        if let fontID {
+            table.set(fontID, font)
+        }
         // Document Info: the Producer marks output as already converted,
         // so re-analysing it yields a pass-through verdict (idempotency).
         let infoID = table.add(Data("<</Producer (\(winAnsiLiteral(producer).literal))>>".utf8))
@@ -359,30 +368,55 @@ public enum PDFWriter {
     /// A string literal body for the WinAnsi-encoded font: ASCII as
     /// itself, other WinAnsi characters as octal escapes (so the content
     /// stream stays ASCII), and anything outside WinAnsi as a space.
-    /// `glyphs` counts characters before escaping, for the width maths.
-    static func winAnsiLiteral(_ s: String) -> (literal: String, glyphs: Int) {
+    /// `width` is its advance in Helvetica, in ems.
+    static func winAnsiLiteral(_ s: String) -> (literal: String, width: Double) {
         var out = ""
-        var glyphs = 0
-        for ch in s.precomposedStringWithCanonicalMapping.unicodeScalars {
-            glyphs += 1
-            switch ch {
-            case "(": out += "\\("
-            case ")": out += "\\)"
-            case "\\": out += "\\\\"
-            case let c where c.value >= 0x20 && c.value < 0x7F:
-                out.unicodeScalars.append(c)
-            case let c where c.value >= 0xA0 && c.value <= 0xFF:
-                out += octal(UInt8(c.value))
-            case let c:
-                if let code = winAnsiExtras[c] {
-                    out += octal(code)
-                } else {
-                    out += " "
-                }
+        var width = 0
+        for scalar in s.precomposedStringWithCanonicalMapping.unicodeScalars {
+            let code = winAnsiCode(scalar) ?? 0x20
+            width += helveticaWidths[Int(code - firstCode)]
+            switch code {
+            case 0x28, 0x29, 0x5C: out += "\\" + String(Unicode.Scalar(code))
+            case 0x20..<0x7F: out.unicodeScalars.append(Unicode.Scalar(code))
+            default: out += octal(code)
             }
         }
-        return (out, glyphs)
+        return (out, Double(width) / 1000)
     }
+
+    private static func winAnsiCode(_ scalar: Unicode.Scalar) -> UInt8? {
+        switch scalar.value {
+        case 0x20..<0x7F, 0xA0...0xFF: UInt8(scalar.value)
+        default: winAnsiExtras[scalar]
+        }
+    }
+
+    /// The OCR layer's font. WinAnsiEncoding so it carries Latin-1 text
+    /// (accents, curly quotes, dashes), not just ASCII.
+    private static let font = Data(
+        "<</Type/Font/Subtype/Type1/BaseFont/Helvetica/Encoding/WinAnsiEncoding/FirstChar \(firstCode)/LastChar 255/Widths[\(helveticaWidths.map(String.init).joined(separator: " "))]>>"
+            .utf8)
+
+    private static let firstCode: UInt8 = 32
+
+    /// Helvetica's advance for each WinAnsi code from 32 to 255, in
+    /// thousandths of an em, from the system's Helvetica. The font's
+    /// /Widths says the same, so a reader sets the OCR text exactly as it
+    /// was scaled to its box: scaled by an average width, wide words ran
+    /// into the next and pdftotext joined them ("DearCommissioner").
+    static let helveticaWidths: [Int] = {
+        let font = CTFontCreateWithName("Helvetica" as CFString, 1000, nil)
+        var widths = [Int](repeating: 0, count: 256 - Int(firstCode))
+        for scalar in (UInt32(firstCode)...0xFF).compactMap(Unicode.Scalar.init) + winAnsiExtras.keys {
+            guard let code = winAnsiCode(scalar) else { continue }
+            var unit = UniChar(scalar.value)
+            var glyph: CGGlyph = 0
+            guard CTFontGetGlyphsForCharacters(font, &unit, &glyph, 1) else { continue }
+            widths[Int(code - firstCode)] = Int(
+                CTFontGetAdvancesForGlyphs(font, .horizontal, &glyph, nil, 1).rounded())
+        }
+        return widths
+    }()
 
     private static func octal(_ b: UInt8) -> String {
         let digits = String(b, radix: 8)

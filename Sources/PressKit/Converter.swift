@@ -101,7 +101,7 @@ public enum Converter {
     public static func convert(
         report: PDFInspector.Report, to outURL: URL,
         settings: Settings = Settings()
-    ) throws -> FileResult {
+    ) async throws -> FileResult {
         let holdsSource = try checkDestination(outURL, source: report.url)
         if case .passThrough = report.verdict {
             return try copyResult(report, to: outURL, reason: .passThrough, alreadyThere: holdsSource)
@@ -112,9 +112,12 @@ public enum Converter {
         var pages: [PDFWriter.Page] = []
         for (i, info) in report.pages.enumerated() {
             try Task.checkCancellation()
-            pages.append(
-                try convertPage(
-                    page(i + 1, of: doc, report), info: info, settings: settings, copier: copier))
+            var (page, ocr) = try convertPage(
+                page(i + 1, of: doc, report), info: info, settings: settings, copier: copier)
+            if let ocr {
+                page.ocrWords = try await OCR.recognize(cgImage: ocr)
+            }
+            pages.append(page)
         }
 
         let data = try PDFWriter.build(pages: pages)
@@ -160,7 +163,7 @@ public enum Converter {
         let doc = try open(report)
         var settings = settings
         settings.ocr = false
-        let converted = try convertPage(
+        let (converted, _) = try convertPage(
             page(number, of: doc, report), info: report.pages[number - 1], settings: settings,
             copier: PageCopier())
         let encoding = encoding(of: converted.content)
@@ -192,10 +195,11 @@ public enum Converter {
         return page
     }
 
-    /// One page through the encoding ladder.
+    /// One page through the encoding ladder, and what OCR should read when
+    /// it is on.
     private static func convertPage(
         _ page: CGPDFPage, info: PDFInspector.PageInfo, settings: Settings, copier: PageCopier
-    ) throws -> PDFWriter.Page {
+    ) throws -> (page: PDFWriter.Page, ocr: CGImage?) {
         let nativeDpi: Int
         // Renders above a scan's own resolution enlarge it (PDFRender.gray).
         let scanDpi: Int?
@@ -209,7 +213,7 @@ public enum Converter {
             // verdict exists to prevent. Rasterising stays the fallback
             // for a page whose objects can't be copied.
             if let copied = try? copier.copy(page) {
-                return PDFWriter.Page(original: copied)
+                return (PDFWriter.Page(original: copied), nil)
             }
             nativeDpi = settings.dpiCap
             scanDpi = nil
@@ -306,11 +310,10 @@ public enum Converter {
         // Vision than 1-bit input, and much faster. Word boxes are
         // normalised, so the text layer is unaffected. Prepared only
         // when OCR is on.
-        var words: [OCR.Word] = []
-        if settings.ocr, let img = ocrInput(ocrSource, at: dpi).cgImage {
-            words = try OCR.recognize(cgImage: img)
-        }
-        return PDFWriter.Page(content: content, dpi: dpi, ocrWords: words)
+        return (
+            PDFWriter.Page(content: content, dpi: dpi),
+            settings.ocr ? ocrInput(ocrSource, at: dpi).cgImage : nil
+        )
     }
 
     /// The cheap render a page is classified on. Cleaned first when asked: a

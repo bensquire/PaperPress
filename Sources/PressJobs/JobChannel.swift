@@ -15,16 +15,18 @@ public enum JobChannel {
 
     /// The socket, in the user's own Application Support: ~/Library is private
     /// to its user, where a fixed name in /tmp could be taken first by anyone
-    /// and answered in the app's place. The home directory comes from the
-    /// user database, not $HOME, which a client launching the helper may
-    /// have changed.
+    /// and answered in the app's place.
     public static var socketPath: String {
-        var home = FileManager.default.homeDirectoryForCurrentUser
-        if let entry = getpwuid(getuid()), let dir = entry.pointee.pw_dir {
-            home = URL(fileURLWithPath: String(cString: dir), isDirectory: true)
+        home.appendingPathComponent("Library/Application Support/PaperPress/paperpress.sock").path
+    }
+
+    /// From the user database, not $HOME, which a client launching the helper
+    /// may have changed.
+    static var home: URL {
+        guard let entry = getpwuid(getuid()), let dir = entry.pointee.pw_dir else {
+            return FileManager.default.homeDirectoryForCurrentUser
         }
-        return home.appendingPathComponent("Library/Application Support/PaperPress/paperpress.sock")
-            .path
+        return URL(fileURLWithPath: String(cString: dir), isDirectory: true)
     }
 
     /// The longest path a `sockaddr_un` holds, terminator included.

@@ -1,4 +1,5 @@
 import AppKit
+import PressJobs
 
 /// Receives PDFs/folders from Finder — "Open With", Dock drops, and the
 /// "Analyse with PaperPress" Services menu entry — and routes them into
@@ -18,6 +19,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.servicesProvider = self
+        Task.detached(priority: .background) { Inbox.sweep() }
     }
 
     public func application(_ application: NSApplication, open urls: [URL]) {

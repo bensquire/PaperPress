@@ -298,3 +298,16 @@ enum Fixtures {
         return url
     }
 }
+
+/// XCTAssertThrowsError for work that has to be awaited.
+func assertThrowsAsync<T>(
+    _ expression: @autoclosure () async throws -> T, file: StaticString = #filePath, line: UInt = #line,
+    _ errorHandler: (any Error) -> Void = { _ in }
+) async {
+    do {
+        _ = try await expression()
+        XCTFail("expected an error", file: file, line: line)
+    } catch {
+        errorHandler(error)
+    }
+}

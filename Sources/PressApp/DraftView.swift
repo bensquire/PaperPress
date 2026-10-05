@@ -23,12 +23,15 @@ struct DraftView: View {
                 Divider()
                 convertBar
             }
-            StatusBar(
-                text: model.phase == .idle ? "Originals are never modified" : model.sourceLabel,
-                error: model.errorText, busy: model.busy,
-                trailing: model.rows.isEmpty
-                    ? nil : "\(model.rows.count) PDF\(model.rows.count == 1 ? "" : "s")"
-            )
+            // Not under the empty drop zone, which runs to the window's
+            // bottom edge to follow its corners, unless there's an error.
+            if model.phase != .idle || model.errorText != nil {
+                StatusBar(
+                    text: model.sourceLabel, error: model.errorText, busy: model.busy,
+                    trailing: model.rows.isEmpty
+                        ? nil : "\(model.rows.count) PDF\(model.rows.count == 1 ? "" : "s")"
+                )
+            }
         }
         .onChange(of: model.phase) {
             // A phase change invalidates what the selection points at.
@@ -40,20 +43,29 @@ struct DraftView: View {
 
     // MARK: Centred states
 
-    /// Shared skeleton for the drop / progress states: centred header +
-    /// title + detail, sitting slightly above centre.
-    private func centeredState<Header: View, Detail: View>(
-        title: String,
+    /// Shared skeleton for the drop / progress states, a little above centre:
+    /// a header, the title with its line beneath (a pair, so close), then the
+    /// actions, each group 20 pt from the next.
+    private func centeredState<Header: View, Actions: View>(
+        title: String, subtitle: String,
         @ViewBuilder header: () -> Header,
-        @ViewBuilder detail: () -> Detail
+        @ViewBuilder actions: () -> Actions
     ) -> some View {
-        VStack(spacing: 18) {
+        VStack(spacing: 20) {
             Spacer()
             header()
-            Text(title)
-                .font(.title3)
-                .foregroundStyle(.secondary)
-            detail()
+            VStack(spacing: 6) {
+                Text(title)
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+                Text(subtitle)
+                    .font(.callout)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: 420)
+            }
+            actions()
             Spacer()
             Spacer()
         }
@@ -89,14 +101,14 @@ struct DraftView: View {
     // MARK: Idle / drop state
 
     private var dropState: some View {
-        centeredState(title: "Drop scanned PDFs, or folders of them") {
+        centeredState(
+            title: "Drop scanned PDFs, or folders of them",
+            subtitle: "Every PDF inside is analysed — nothing is changed until you convert"
+        ) {
             Image(systemName: "folder.badge.gearshape")
                 .font(.system(size: 64, weight: .thin))
                 .foregroundStyle(.tertiary)
-        } detail: {
-            Text("Every PDF inside is analysed — nothing is changed until you convert")
-                .font(.callout)
-                .foregroundStyle(.tertiary)
+        } actions: {
             Button {
                 model.chooseSource()
             } label: {
@@ -110,14 +122,13 @@ struct DraftView: View {
             .keyboardShortcut(.defaultAction)
         }
         .background(
-            RoundedRectangle(cornerRadius: 12)
-                .strokeBorder(
-                    style: StrokeStyle(lineWidth: 2, dash: [8]),
-                    antialiased: true
-                )
+            // Inset evenly from the window's edges, with corners that follow
+            // its own (/documentation/swiftui/concentricrectangle).
+            ConcentricRectangle(corners: .concentric(minimum: 12), isUniform: true)
+                .stroke(style: StrokeStyle(lineWidth: 2, dash: [8]))
                 .foregroundStyle(dropHovering ? Color.accentColor : Color(.separatorColor))
-                .padding(16)
         )
+        .padding(16)
         .onDrop(of: [.fileURL], isTargeted: $dropHovering) { providers in
             handleDrop(providers, append: false)
         }
@@ -126,20 +137,14 @@ struct DraftView: View {
     // MARK: Analysing state
 
     private func analysingState(done: Int, of: Int) -> some View {
-        centeredState(title: "Analysing PDFs…") {
+        centeredState(title: "Analysing PDFs…", subtitle: of > 0 ? "\(done) of \(of)" : "Looking for PDFs") {
             if of > 0 {
                 ProgressView(value: Double(done), total: Double(of))
                     .frame(maxWidth: 320)
             } else {
                 ProgressView()
             }
-        } detail: {
-            Text(of > 0 ? "\(done) of \(of)" : "Looking for PDFs")
-                .font(.callout)
-                .foregroundStyle(.tertiary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .frame(maxWidth: 420)
+        } actions: {
             Button("Cancel", role: .cancel) { model.cancel() }
                 .hoverHighlight()
         }
@@ -193,7 +198,8 @@ struct DraftView: View {
             Button("Discard", role: .destructive) { model.reset() }
                 .hoverHighlight()
         }
-        .padding(12)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
     }
 }
 

@@ -53,6 +53,7 @@ struct FakeLauncher: PaperPressLauncher {
     var isRunning: Bool { get async { running } }
     var runningApp: AppCopy? { get async { nil } }
     var helper: AppCopy { AppCopy(path: "/test/paperpress-mcp", version: "1", built: nil) }
+    var helperReplaced = false
     func launch() async throws { try launches() }
 }
 
@@ -78,6 +79,21 @@ final class PaperPressToolsTests: FixtureTestCase {
 
     // MARK: analyse
 
+    func test_everyToolTakingASource_pointsAtTheInbox() {
+        // Arrange / Act — a client may not show the server's instructions
+        let sources = PaperPressTools.toolDefinitions.compactMap { tool -> (String, String)? in
+            let properties = tool["inputSchema"]?["properties"]
+            guard let source = properties?["paths"] ?? properties?["path"] else { return nil }
+            return (tool["name"]?.string ?? "", source["description"]?.string ?? "")
+        }
+
+        // Assert
+        XCTAssertEqual(Set(sources.map(\.0)), ["analyse", "preview", "convert"])
+        for (name, description) in sources {
+            XCTAssertTrue(description.contains(Inbox.folder.path), name)
+        }
+    }
+
     func test_analyse_givesEachFileAVerdictWithoutTheApp() async throws {
         // Arrange — a scan and a born-digital file
         let src = dir.appendingPathComponent("in")
@@ -95,6 +111,21 @@ final class PaperPressToolsTests: FixtureTestCase {
         XCTAssertTrue(text.contains("1 born digital"), text)
         XCTAssertEqual(result.structured?["files"]?.array?.count, 2)
         XCTAssertTrue(link.sent.isEmpty)
+    }
+
+    func test_analyse_fromAReplacedHelper_saysItIsTheOlderVersion() async throws {
+        // Arrange — PaperPress updated under a helper the client kept running
+        let src = Fixtures.write(Fixtures.lowResTextScanPDF(), to: dir, name: "scan.pdf")
+        var launcher = FakeLauncher()
+        launcher.helperReplaced = true
+
+        // Act
+        let result = try await call(
+            tools(silentApp, launcher: launcher), "analyse", ["paths": [.string(src.path)]])
+
+        // Assert — answered, and said first
+        XCTAssertEqual(result.text.first, PaperPressTools.replacedNote)
+        XCTAssertTrue(result.text.dropFirst().joined().contains("re-compress"))
     }
 
     func test_analyse_missingPath_isAnErrorNamingIt() async throws {

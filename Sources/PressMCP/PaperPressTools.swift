@@ -42,6 +42,8 @@ public protocol PaperPressLauncher: Sendable {
     /// This helper, as it was when it started: a helper keeps running the code
     /// it started with after the file on disk is replaced.
     var helper: AppCopy { get }
+    /// The helper's file has been replaced since it started.
+    var helperReplaced: Bool { get }
     func launch() async throws
 }
 
@@ -75,18 +77,26 @@ public struct PaperPressTools: MCPTools {
         self.workingDirectory = workingDirectory
     }
 
+    /// Where a client puts a file that isn't on this Mac yet: in every
+    /// schema that takes a source, since not every client shows a server's
+    /// instructions.
+    static let inboxNote =
+        "A PDF that isn't on this Mac yet, such as one attached to a chat, can be saved into \(Inbox.folder.path)/ first: PaperPress deletes it from there once a batch has written it out, or after a day."
+
     public static let instructions = """
-        PaperPress shrinks scanned PDFs on this Mac. Scan pages become 1-bit CCITT G4 (about \
-        20 KB an A4 page) with a searchable OCR text layer; photographs stay grayscale JPEG; \
+        PaperPress shrinks scanned PDFs on this Mac. Scan pages become 1-bit CCITT G4 (10 to \
+        80 KB a page, by how much is on it) with a searchable OCR text layer; photographs stay grayscale JPEG; \
         print too fine for black and white stays 4-bit grayscale; born-digital pages are kept as \
         they are. Start with analyse: it reads PDFs or folders of them without changing anything \
         and gives each file a verdict (re-compress, or leave alone because it is born digital, \
         already converted, already compact or already small) with an estimated size. Use preview \
         to see one page as it would come out before committing a batch, when legibility matters. \
         Then convert into an output folder: copies are written there mirroring the sources. \
-        Originals are never modified, an output folder that would put a file on top of an \
-        original is refused, and a file already in the output folder is replaced only if \
-        PaperPress wrote it. Conversion takes about a second a page with OCR, so convert hands \
+        Originals are never modified (but a file in PaperPress's inbox is deleted from there \
+        once written out), an output folder that would put a file on top of an original is refused, and a file already in the output folder is replaced only if \
+        PaperPress wrote it. A PDF that isn't on this Mac yet, such as one attached to a chat, \
+        can be saved into PaperPress's inbox first rather than somewhere it would be left \
+        behind; see the paths parameter. Conversion takes about a second a page with OCR, so convert hands \
         back a job id after 45 seconds rather than holding the call; follow it with wait. Jobs \
         run one at a time in PaperPress's queue, where the user can see and cancel them, and the \
         user may have to approve one before it runs.
@@ -97,8 +107,9 @@ public struct PaperPressTools: MCPTools {
     static let toolDefinitions: [JSONValue] = {
         let paths: JSONValue = [
             "type": "array", "minItems": 1, "items": ["type": "string"],
-            "description":
-                "PDF files and folders of them (searched recursively). Full paths are safest: a relative path is taken from wherever the client started this server.",
+            "description": .string(
+                "PDF files and folders of them (searched recursively). Full paths are safest: a relative path is taken from wherever the client started this server. \(inboxNote)"
+            ),
         ]
         // Defaults read from the converter, so the schema can't drift from it.
         let defaults = Converter.Settings()
@@ -176,7 +187,7 @@ public struct PaperPressTools: MCPTools {
                 "inputSchema": [
                     "type": "object", "required": ["path"], "additionalProperties": false,
                     "properties": [
-                        "path": ["type": "string", "description": "A PDF file."],
+                        "path": ["type": "string", "description": .string("A PDF file. \(inboxNote)")],
                         "page": [
                             "type": "integer", "minimum": 1,
                             "description": "Page number, from 1 (default 1).",
@@ -201,7 +212,7 @@ public struct PaperPressTools: MCPTools {
             [
                 "name": "convert", "title": "Convert PDFs",
                 "description":
-                    "Writes compressed copies of PDFs, or folders of them, into an output folder, through PaperPress's queue. By default only the files worth re-compressing are written; with copy_unchanged the rest are copied too, so the output mirrors the sources whole. Originals are never modified. Opens PaperPress if it isn't running (the user must have turned on Settings › Assistants). Returns the batch's results, or its job id if it is still running after wait_seconds; the job carries on either way.",
+                    "Writes compressed copies of PDFs, or folders of them, into an output folder, through PaperPress's queue. By default only the files worth re-compressing are written; with copy_unchanged the rest are copied too, so the output mirrors the sources whole. Originals are never modified (but a file in PaperPress's inbox is deleted from there once written out). Opens PaperPress if it isn't running (the user must have turned on Settings › Assistants). Returns the batch's results, or its job id if it is still running after wait_seconds; the job carries on either way.",
                 "inputSchema": [
                     "type": "object", "required": ["paths", "output"], "additionalProperties": false,
                     "properties": [
@@ -209,7 +220,7 @@ public struct PaperPressTools: MCPTools {
                         "output": [
                             "type": "string",
                             "description":
-                                "The folder to write into, created if needed. Not a source folder, and not one inside a source folder that would mirror onto its originals.",
+                                "The folder to write into, created if needed. Not a source folder, not one inside a source folder that would mirror onto its originals, and not PaperPress's inbox.",
                         ],
                         "copy_unchanged": [
                             "type": "boolean",
@@ -270,8 +281,8 @@ public struct PaperPressTools: MCPTools {
     {
         do {
             switch name {
-            case "analyse": return try await analyse(arguments, progress: progress)
-            case "preview": return try preview(arguments)
+            case "analyse": return noteIfReplaced(try await analyse(arguments, progress: progress))
+            case "preview": return noteIfReplaced(try preview(arguments))
             case "convert": return try await convert(arguments, progress: progress)
             case "wait": return try await waitForJobs(arguments, progress: progress)
             case "job_status": return try await jobStatus(arguments)
@@ -283,6 +294,24 @@ public struct PaperPressTools: MCPTools {
             return MCPToolResult(text: [failure.message], isError: true)
         }
     }
+
+    /// analyse and preview run in this process, so once PaperPress is updated
+    /// they answer with the old code until the client restarts the helper (an
+    /// analyse kept giving the old size estimate): they say so.
+    private func noteIfReplaced(_ result: MCPToolResult) -> MCPToolResult {
+        guard launcher.helperReplaced else { return result }
+        var result = result
+        result.blocks.insert(.text(Self.replacedNote), at: 0)
+        return result
+    }
+
+    static let replacedNote =
+        "PaperPress has been updated since this helper started, so this answer comes from the older version: \(restart) to use the new one."
+
+    /// A client keeps its MCP server running while PaperPress is updated
+    /// under it.
+    static let restart =
+        "restart the PaperPress server in the client (in Claude Code, /mcp; in Claude Desktop, quit and reopen it)"
 
     /// A tool execution error, in words the model can act on.
     public struct ToolFailure: Error {
@@ -613,7 +642,7 @@ public struct PaperPressTools: MCPTools {
         } else {
             let fresh = app.map { " or point the client at \($0.path)/Contents/MacOS/paperpress-mcp" } ?? ""
             lines.append(
-                "This helper is the older one. A client keeps its MCP server running after PaperPress is updated, so restart the server in the client (in Claude Code, /mcp; Claude Desktop, quit and reopen it)\(fresh)."
+                "This helper is the older one. A client keeps its MCP server running after PaperPress is updated, so \(restart)\(fresh)."
             )
         }
         return lines.joined(separator: "\n")

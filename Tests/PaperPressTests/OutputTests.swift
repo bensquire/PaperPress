@@ -1,4 +1,5 @@
 import CoreGraphics
+import CoreText
 import PDFKit
 import XCTest
 
@@ -57,16 +58,49 @@ final class PDFWriterTests: FixtureTestCase {
         XCTAssertTrue(text.contains("Grüße"), "got \(text)")
     }
 
-    func test_build_highlightsAWordOverItsBox() throws {
-        // Arrange / Act — a word where OCR boxed it
-        let url = try ocrPDF([word("HELLO")])
-
-        // Assert — selecting it highlights the box, not below it
+    /// Where a reader puts the OCR layer's first `length` characters, and
+    /// the page's size, in points.
+    private func selected(_ length: Int, in url: URL) throws -> (bounds: CGRect, page: CGSize) {
         let page = try XCTUnwrap(PDFDocument(url: url)?.page(at: 0))
-        let height = page.bounds(for: .mediaBox).height
-        let highlight = try XCTUnwrap(page.selection(for: NSRange(location: 0, length: 5))).bounds(for: page)
-        XCTAssertEqual(highlight.minY, 0.8 * height, accuracy: 0.5)
-        XCTAssertEqual(highlight.height, 0.05 * height, accuracy: 0.5)
+        let selection = try XCTUnwrap(page.selection(for: NSRange(location: 0, length: length)))
+        return (selection.bounds(for: page), page.bounds(for: .mediaBox).size)
+    }
+
+    func test_build_highlightsAWordOverItsBox() throws {
+        // Arrange / Act — capitals, wider than an average letter, where OCR
+        // boxed them
+        let (highlight, page) = try selected(5, in: try ocrPDF([word("HELLO")]))
+
+        // Assert — selecting it highlights the box: not below it, and not
+        // past it into a next word, which a reader would then join it to
+        XCTAssertEqual(highlight.minX, 0.1 * page.width, accuracy: 1)
+        XCTAssertEqual(highlight.maxX, 0.3 * page.width, accuracy: 1)
+        XCTAssertEqual(highlight.minY, 0.8 * page.height, accuracy: 0.5)
+        XCTAssertEqual(highlight.height, 0.05 * page.height, accuracy: 0.5)
+    }
+
+    func test_build_endsAWordClearOfTheNextOnItsLine() throws {
+        // Arrange / Act — boxes all but touching, as Vision's do
+        let (first, page) = try selected(5, in: try ocrPDF([word("other"), word("states", x: 0.302)]))
+
+        // Assert — a gap of a fifth of the font size before the next word,
+        // where pdftotext -raw breaks words (it ignores space characters)
+        XCTAssertLessThanOrEqual(first.maxX, 0.302 * page.width - 0.2 * 0.05 * page.height)
+    }
+
+    func test_build_withoutAnOCRLayer_leavesTheFontOut() throws {
+        // Arrange / Act
+        let pdf = try PDFWriter.build(pages: [PDFWriter.Page(content: .g4(Self.background), dpi: 150)])
+
+        // Assert — nearly a kilobyte of /Widths no page would use
+        XCTAssertNil(pdf.range(of: Data("/BaseFont".utf8)))
+    }
+
+    func test_helveticaWidths_matchTheStandardMetrics() {
+        // Arrange / Act / Assert — space, a, D, é, en dash (AFM: 278 556 722 556 556)
+        let widths = PDFWriter.helveticaWidths
+        XCTAssertEqual(widths.count, 224)
+        XCTAssertEqual([0x20, 0x61, 0x44, 0xE9, 0x96].map { widths[$0 - 32] }, [278, 556, 722, 556, 556])
     }
 
     func test_build_keepsTheSpaceBetweenWordBoxes() throws {
@@ -141,12 +175,43 @@ final class PressErrorTests: XCTestCase {
 }
 
 final class OCRTests: XCTestCase {
-    func test_recognize_findsEachWordOnAClearPage() throws {
+    func test_recognize_keepsLinesVisionDoesNotSplitIntoWords() async throws {
+        // Arrange — English and Chinese lines on one page
+        let w = 1200, h = 300
+        let context = try XCTUnwrap(
+            CGContext(
+                data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w,
+                space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue))
+        context.setFillColor(gray: 1, alpha: 1)
+        context.fill(CGRect(x: 0, y: 0, width: w, height: h))
+        for (i, (font, text)) in [
+            ("Helvetica", "Invoice number 4521 for the archive"), ("PingFang SC", "发票号码用于档案保存"),
+        ]
+        .enumerated() {
+            let attributes: [CFString: Any] = [
+                kCTFontAttributeName: CTFontCreateWithName(font as CFString, 40, nil)
+            ]
+            context.textPosition = CGPoint(x: 40, y: CGFloat(h - 100 - i * 120))
+            CTLineDraw(
+                CTLineCreateWithAttributedString(
+                    CFAttributedStringCreate(nil, text as CFString, attributes as CFDictionary)), context)
+        }
+
+        // Act
+        let words = try await OCR.recognize(cgImage: try XCTUnwrap(context.makeImage()))
+
+        // Assert — the English word by word, and the Chinese line whole
+        let texts = words.map(\.text)
+        XCTAssertTrue(texts.contains("Invoice"), "\(texts)")
+        XCTAssertTrue(texts.contains { $0.contains("发票") }, "\(texts)")
+    }
+
+    func test_recognize_findsEachWordOnAClearPage() async throws {
         // Arrange — legible rendered type
         let page = Fixtures.renderedTextPage(fontSize: 14, ink: 0.1)
 
         // Act
-        let words = try OCR.recognize(cgImage: try XCTUnwrap(page.cgImage))
+        let words = try await OCR.recognize(cgImage: try XCTUnwrap(page.cgImage))
 
         // Assert — Vision finds text, one word an entry, each boxed in
         // range and narrower than the line it came from

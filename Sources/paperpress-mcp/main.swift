@@ -34,6 +34,10 @@ struct WorkspaceLauncher: PaperPressLauncher {
         try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
     }
 
+    var helperReplaced: Bool {
+        Self.modified(URL(fileURLWithPath: helper.path)) != helper.built
+    }
+
     var isRunning: Bool {
         get async { await runningApp != nil }
     }
@@ -63,6 +67,9 @@ let launcher = WorkspaceLauncher(
         version: WorkspaceLauncher.copy(of: bundle).version,
         built: Bundle.main.executableURL.flatMap(WorkspaceLauncher.modified(_:))))
 let mismatch = await alignWithRunningPaperPress(link, launcher)
+// Ready for a client to save into, and rid of what was left there.
+Inbox.prepare()
+Inbox.sweep()
 let tools = PaperPressTools(
     link: link, launcher: launcher,
     workingDirectory: URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true))
