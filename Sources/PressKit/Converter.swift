@@ -197,9 +197,12 @@ public enum Converter {
         _ page: CGPDFPage, info: PDFInspector.PageInfo, settings: Settings, copier: PageCopier
     ) throws -> PDFWriter.Page {
         let nativeDpi: Int
+        // Renders above a scan's own resolution enlarge it (PDFRender.gray).
+        let scanDpi: Int?
         switch info.kind {
         case let .scan(dpi, _):
             nativeDpi = dpi
+            scanDpi = dpi
         case .bornDigital:
             // Real text and vector art in a mixed file: carried over
             // object for object — rasterising is what the Born digital
@@ -209,15 +212,16 @@ public enum Converter {
                 return PDFWriter.Page(original: copied)
             }
             nativeDpi = settings.dpiCap
+            scanDpi = nil
         }
 
         // Text pages render at the cap even when the source is lower-res:
         // a low-dpi grayscale scan carries sub-pixel detail in its
         // antialiasing, and thresholding at native resolution destroys it
-        // (jagged text). Upsampling first turns that antialiasing back
-        // into smooth 1-bit edges — at the price of processing every
-        // low-res page at cap resolution. Photographs render at their own
-        // resolution, up to the photo cap.
+        // (jagged text). Upsampling first (Lanczos, in PDFRender.gray)
+        // turns that antialiasing back into smooth 1-bit edges — at the
+        // price of processing every low-res page at cap resolution.
+        // Photographs render at their own resolution, up to the photo cap.
         let textDpi = max(72, settings.dpiCap)
         let probeRenderDpi = min(probeDpi, textDpi)
         let probeCleaned = settings.removeScanEdges
@@ -231,7 +235,7 @@ public enum Converter {
             if dpi == probeRenderDpi, clean == probeCleaned {
                 return probe
             }
-            var g = try PDFRender.gray(page: page, dpi: dpi)
+            var g = try PDFRender.gray(page: page, dpi: dpi, sourceDpi: scanDpi)
             if clean {
                 EdgeClean.removeScanBorders(&g, dpi: dpi)
             }
