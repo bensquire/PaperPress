@@ -38,10 +38,25 @@ public extension Pipeline.GrayImage {
     /// when it has too little contrast to stretch. For pages the classifier
     /// calls text — it alone judges paper and ink: a photograph's light and
     /// dark halves aren't, and stretching them would clip it.
+    ///
+    /// The black point is the darkest ink, not the ink class's mean: the
+    /// mean takes in every antialiased fringe pixel, and mapping it to black
+    /// clipped half the ink and thickened strokes 1.33× on a 100 dpi letter.
+    /// The ink class's darkest twentieth keeps them as scanned (1.00×).
     func levelled(_ levels: Binarize.Levels? = nil) -> Pipeline.GrayImage {
         guard let (ink, paper) = levels ?? Binarize.levels(self) else { return self }
-        let scale = 255 / (paper - ink)
-        let lut = (0...255).map { UInt8(clamping: Int(((Double($0) - ink) * scale).rounded())) }
+        let hist = Pipeline.histogram(self)
+        let split = Int((ink + paper) / 2)
+        let inkCount = hist[0..<split].reduce(0, +)
+        var seen = 0.0
+        let black = Double(
+            (0..<split).first { v in
+                seen += hist[v]
+                return seen >= 0.05 * inkCount
+            } ?? Int(ink))
+        guard paper - black > Binarize.minContrast else { return self }
+        let scale = 255 / (paper - black)
+        let lut = (0...255).map { UInt8(clamping: Int(((Double($0) - black) * scale).rounded())) }
         var out = self
         lut.withUnsafeBufferPointer { table in
             out.pixels.withUnsafeMutableBufferPointer { px in

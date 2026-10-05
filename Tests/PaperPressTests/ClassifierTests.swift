@@ -92,4 +92,21 @@ final class PageClassifierTests: XCTestCase {
         // Act / Assert
         XCTAssertEqual(flat.levelled().pixels, flat.pixels)
     }
+
+    func test_levelled_keepsStrokeWeight() {
+        // Arrange — real type (ink 13, paper 250) antialiased at a low
+        // resolution, as a 100 dpi scan holds it
+        let gray = Fixtures.renderedTextPage(fontSize: 14, ink: 0.05).resampled(scale: 0.75)
+
+        // Act
+        let levelled = gray.levelled()
+
+        // Assert — about the same coverage of ink, now black on white (the
+        // ink class's mean as black point made these strokes 1.34× heavier)
+        func coverage(_ g: Pipeline.GrayImage, ink: Double, paper: Double) -> Double {
+            g.pixels.reduce(0.0) { $0 + max(0, min(1, (paper - Double($1)) / (paper - ink))) }
+        }
+        let weight = coverage(levelled, ink: 0, paper: 255) / coverage(gray, ink: 13, paper: 250)
+        XCTAssertEqual(weight, 1, accuracy: 0.12, "stroke weight \(weight)× the scan's")
+    }
 }
