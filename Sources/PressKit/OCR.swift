@@ -18,7 +18,7 @@ public enum OCR {
         return try recognize(cgImage: img)
     }
 
-    /// Recognise text on any image (used for grayscale JPEG fallback pages).
+    /// Recognise text on any image, one entry per word.
     public static func recognize(cgImage img: CGImage) throws -> [Word] {
         let request = VNRecognizeTextRequest()
         request.recognitionLevel = .accurate
@@ -29,10 +29,21 @@ public enum OCR {
         // (macOS 26, full size and at 0.45x), and detection cost ~3% per
         // page — so it stays off.
         try VNImageRequestHandler(cgImage: img).perform([request])
+        return (request.results ?? []).flatMap(words(in:))
+    }
+
+    /// Each whitespace-separated word with its own box
+    /// (`boundingBox(for:)`, /documentation/vision/vnrecognizedtext), since
+    /// a whole line stretched over its box drifts from the ink. If Vision
+    /// can't place every word, the line goes in as one.
+    private static func words(in line: VNRecognizedTextObservation) -> [Word] {
+        guard let candidate = line.topCandidates(1).first else { return [] }
+        let text = candidate.string
         var words: [Word] = []
-        for obs in request.results ?? [] {
-            guard let candidate = obs.topCandidates(1).first else { continue }
-            words.append(Word(text: candidate.string, box: obs.boundingBox))
+        for word in text.split(whereSeparator: \.isWhitespace) {
+            guard let box = try? candidate.boundingBox(for: word.startIndex..<word.endIndex)?.boundingBox
+            else { return [Word(text: text, box: line.boundingBox)] }
+            words.append(Word(text: String(word), box: box))
         }
         return words
     }

@@ -137,24 +137,29 @@ public enum PDFWriter {
             var content = "q \(fmt(ptW)) 0 0 \(fmt(ptH)) \(fmt(ox)) \(fmt(oy)) cm /Im0 Do Q"
             if !page.ocrWords.isEmpty {
                 content += "\nBT 3 Tr"
+                // One entry a word: its numbers are most of the layer's
+                // bytes, so each word moves from the last (Td) by tenths
+                // of a point, and scales in whole percent.
+                var last = (x: 0.0, y: 0.0)
                 for word in page.ocrWords {
                     let (text, glyphs) = winAnsiLiteral(word.text)
                     guard glyphs > 0 else { continue }
-                    let x = ox + word.box.minX * ptW
-                    let y = oy + word.box.minY * ptH
+                    let x = tenth(ox + word.box.minX * ptW)
+                    let y = tenth(oy + word.box.minY * ptH)
                     let boxW = word.box.width * ptW
-                    let size = max(4, word.box.height * ptH)
+                    let size = tenth(max(4, word.box.height * ptH))
                     // Horizontal scale so the string spans the detected box.
                     let nominal = Double(glyphs) * size * 0.5
                     let tz = nominal > 0 ? boxW / nominal * 100 : 100
-                    content += "\n/F1 \(fmt(size)) Tf \(fmt(min(500, max(20, tz)))) Tz"
-                    content += " 1 0 0 1 \(fmt(x)) \(fmt(y)) Tm (\(text)) Tj"
+                    content += "\n/F1 \(real(size)) Tf \(Int(min(500, max(20, tz)).rounded())) Tz"
+                    // The space after the word, past its box, keeps a reader
+                    // from running neighbours together.
+                    content += " \(real(tenth(x - last.x))) \(real(tenth(y - last.y))) Td (\(text) ) Tj"
+                    last = (x, y)
                 }
                 content += "\nET"
             }
-            // The text layer is several KB of operators per page — a fifth
-            // of a typical 20 KB G4 page until deflated (measured: 5.7 KB
-            // raw, about 1.5 KB compressed, on a dense page).
+            // The text layer is most of a page's operators, and compresses.
             let stream = try Deflate.zlibData(Data(content.utf8))
             var cobj = Data("<</Length \(stream.count)/Filter/FlateDecode>>\nstream\n".utf8)
             cobj.append(stream)
@@ -326,6 +331,10 @@ public enum PDFWriter {
         while s.hasSuffix("0") { s.removeLast() }
         if s.hasSuffix(".") { s.removeLast() }
         return s == "-0" ? "0" : s
+    }
+
+    private static func tenth(_ d: Double) -> Double {
+        (d * 10).rounded() / 10
     }
 
     private static func fmt(_ d: Double) -> String {

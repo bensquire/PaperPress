@@ -4,17 +4,19 @@ import XCTest
 @testable import PressKit
 
 final class PDFWriterTests: FixtureTestCase {
+    /// Encoded once: every OCR-layer test draws its words over this page.
+    private static let background = try! Converter.encodeG4(Fixtures.textPage(), dpi: 150)
+
     /// A one-page G4 PDF carrying `words` as its OCR layer, on disk.
     private func ocrPDF(_ words: [OCR.Word]) throws -> URL {
-        let stream = try Converter.encodeG4(Fixtures.textPage(), dpi: 150)
         let pdf = try PDFWriter.build(
-            pages: [PDFWriter.Page(content: .g4(stream), dpi: 150, ocrWords: words)]
+            pages: [PDFWriter.Page(content: .g4(Self.background), dpi: 150, ocrWords: words)]
         )
         return Fixtures.write(pdf, to: dir, name: "ocr.pdf")
     }
 
-    private func word(_ text: String) -> OCR.Word {
-        OCR.Word(text: text, box: CGRect(x: 0.1, y: 0.8, width: 0.2, height: 0.05))
+    private func word(_ text: String, x: CGFloat = 0.1) -> OCR.Word {
+        OCR.Word(text: text, box: CGRect(x: x, y: 0.8, width: 0.2, height: 0.05))
     }
 
     func test_build_embedsInvisibleOCRTextLayer() throws {
@@ -24,7 +26,7 @@ final class PDFWriterTests: FixtureTestCase {
         // Assert — invisible render mode, the word, and a viewer finds it
         let content = try XCTUnwrap(Fixtures.contentStream(of: url))
         XCTAssertTrue(content.contains("BT 3 Tr"), "text layer should be invisible")
-        XCTAssertTrue(content.contains("(HELLO) Tj"), "word should be in the content stream")
+        XCTAssertTrue(content.contains("(HELLO ) Tj"), "word should be in the content stream")
         XCTAssertTrue(
             Fixtures.pageText(of: url).contains("HELLO"), "page text should be searchable"
         )
@@ -52,6 +54,15 @@ final class PDFWriterTests: FixtureTestCase {
         XCTAssertTrue(text.contains("Café"), "got \(text)")
         XCTAssertTrue(text.contains("brûlée’s"), "got \(text)")
         XCTAssertTrue(text.contains("Grüße"), "got \(text)")
+    }
+
+    func test_build_keepsTheSpaceBetweenWordBoxes() throws {
+        // Arrange / Act — two words side by side, as OCR reports them
+        let url = try ocrPDF([word("DOMESTIC"), word("APPLIANCE", x: 0.32)])
+
+        // Assert — a reader doesn't run them together
+        let text = Fixtures.pageText(of: url)
+        XCTAssertTrue(text.contains("DOMESTIC APPLIANCE"), "got \(text)")
     }
 
     func test_build_stampsPaperPressProducerByDefault() throws {
@@ -117,21 +128,60 @@ final class PressErrorTests: XCTestCase {
 }
 
 final class OCRTests: XCTestCase {
-    func test_recognize_findsTextOnAClearPage() throws {
+    func test_recognize_findsEachWordOnAClearPage() throws {
         // Arrange — legible rendered type
         let page = Fixtures.renderedTextPage(fontSize: 14, ink: 0.1)
 
         // Act
         let words = try OCR.recognize(cgImage: try XCTUnwrap(page.cgImage))
 
-        // Assert — Vision finds text and normalised boxes are in range
+        // Assert — Vision finds text, one word an entry, each boxed in
+        // range and narrower than the line it came from
         XCTAssertFalse(words.isEmpty)
         let joined = words.map(\.text).joined(separator: " ")
         let expected = Fixtures.sampleText.split(separator: " ").map(String.init)
         XCTAssertTrue(expected.contains { joined.contains($0) })
         for word in words {
+            XCTAssertFalse(word.text.contains(where: \.isWhitespace), "\"\(word.text)\" is more than a word")
             XCTAssertTrue(word.box.minX >= 0 && word.box.maxX <= 1)
             XCTAssertTrue(word.box.minY >= 0 && word.box.maxY <= 1)
+            XCTAssertLessThan(word.box.width, 0.5, "\"\(word.text)\" has its line's box")
+        }
+    }
+}
+
+final class G4Tests: XCTestCase {
+    private let codestream: [UInt8] = [0x26, 0xA0, 0x08, 0x00]
+
+    /// A little-endian, one-strip G4 TIFF of an 8 × 1 page: the codestream
+    /// at 8, then the directory at 12, every entry a SHORT.
+    private func tiff(fillOrder: Int) -> Data {
+        var d: [UInt8] = [0x49, 0x49, 42, 0, 12, 0, 0, 0] + codestream
+        let tags = [(256, 8), (257, 1), (259, 4), (262, 0), (266, fillOrder), (273, 8), (279, 4)]
+        d += [UInt8(tags.count), 0]
+        for (tag, value) in tags {
+            d += [UInt8(tag & 0xFF), UInt8(tag >> 8), 3, 0, 1, 0, 0, 0, UInt8(value), 0, 0, 0]
+        }
+        return Data(d + [0, 0, 0, 0])
+    }
+
+    func test_extractStream_readsALittleEndianTIFF() throws {
+        // Arrange / Act — ImageIO writes big-endian, so only this reaches
+        // the little-endian reads
+        let stream = try G4.extractStream(fromTIFF: tiff(fillOrder: 1))
+
+        // Assert
+        XCTAssertEqual(stream.data, Data(codestream))
+        XCTAssertEqual(stream.width, 8)
+        XCTAssertEqual(stream.height, 1)
+    }
+
+    func test_extractStream_refusesReversedBitOrder() {
+        // Arrange / Act / Assert — CCITTFaxDecode would misread every byte
+        XCTAssertThrowsError(try G4.extractStream(fromTIFF: tiff(fillOrder: 2))) {
+            guard case .scanFailed(let message) = $0 as? ScanError, message.contains("fill order") else {
+                return XCTFail("got \($0)")
+            }
         }
     }
 }
