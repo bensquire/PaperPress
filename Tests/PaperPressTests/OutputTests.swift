@@ -1,4 +1,5 @@
 import CoreGraphics
+import PDFKit
 import XCTest
 
 @testable import PressKit
@@ -54,6 +55,18 @@ final class PDFWriterTests: FixtureTestCase {
         XCTAssertTrue(text.contains("Café"), "got \(text)")
         XCTAssertTrue(text.contains("brûlée’s"), "got \(text)")
         XCTAssertTrue(text.contains("Grüße"), "got \(text)")
+    }
+
+    func test_build_highlightsAWordOverItsBox() throws {
+        // Arrange / Act — a word where OCR boxed it
+        let url = try ocrPDF([word("HELLO")])
+
+        // Assert — selecting it highlights the box, not below it
+        let page = try XCTUnwrap(PDFDocument(url: url)?.page(at: 0))
+        let height = page.bounds(for: .mediaBox).height
+        let highlight = try XCTUnwrap(page.selection(for: NSRange(location: 0, length: 5))).bounds(for: page)
+        XCTAssertEqual(highlight.minY, 0.8 * height, accuracy: 0.5)
+        XCTAssertEqual(highlight.height, 0.05 * height, accuracy: 0.5)
     }
 
     func test_build_keepsTheSpaceBetweenWordBoxes() throws {

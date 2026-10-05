@@ -144,10 +144,14 @@ public enum PDFWriter {
                 for word in page.ocrWords {
                     let (text, glyphs) = winAnsiLiteral(word.text)
                     guard glyphs > 0 else { continue }
-                    let x = tenth(ox + word.box.minX * ptW)
-                    let y = tenth(oy + word.box.minY * ptH)
                     let boxW = word.box.width * ptW
                     let size = tenth(max(4, word.box.height * ptH))
+                    // PDFKit highlights Helvetica from 0.23 em below its
+                    // baseline to 0.77 above, so on a baseline that far up
+                    // the box the highlight fills the box Vision drew round
+                    // the ink (on the box's floor, it hung a quarter below).
+                    let x = tenth(ox + word.box.minX * ptW)
+                    let y = tenth(oy + word.box.minY * ptH + size * 0.23)
                     // Horizontal scale so the string spans the detected box.
                     let nominal = Double(glyphs) * size * 0.5
                     let tz = nominal > 0 ? boxW / nominal * 100 : 100
