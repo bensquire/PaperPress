@@ -129,10 +129,7 @@ public enum PDFInspector {
         } else {
             verdict = .convert
         }
-        let estimated =
-            verdict == .convert
-            ? pages.map(estimatedPageBytes).reduce(0, +)
-            : fileBytes
+        let estimated = verdict == .convert ? estimatedBytes(pages, in: doc) : fileBytes
         return Report(
             url: url, fileBytes: fileBytes, pages: pages,
             verdict: verdict, estimatedBytes: estimated
@@ -149,20 +146,64 @@ public enum PDFInspector {
     /// pixel.
     static let estimatedGray4BytesPerPixel = 0.1
 
-    /// Expected output size of one converted page. Pages scanned below
-    /// the G4 resolution floor stay grayscale at native resolution
-    /// (mirroring the converter's dpi gate); the converter may also
-    /// demote adequate-resolution pages on *measured* damage, which
-    /// inspection can't predict — those come out larger than estimated.
-    static func estimatedPageBytes(_ page: PageInfo) -> Int {
-        if case let .scan(native, _) = page.kind, native < assumedMinG4Dpi {
-            let px =
-                page.widthPt / 72 * Double(native) * (page.heightPt / 72 * Double(native))
-            return max(8_000, Int(px * estimatedGray4BytesPerPixel))
+    /// Photographs' output density: two stored as 200 dpi grayscale JPEG
+    /// q0.6 came to 0.110 and 0.113 bytes a pixel.
+    static let estimatedPhotoBytesPerPixel = 0.11
+    static let assumedPhotoDpi = Converter.Settings().photoDpiCap
+    /// Scan pages classified for the estimate; a longer file's other pages
+    /// take the sampled share of photographs. A classification is a render
+    /// (9–18 ms a page, measured), where parsing a whole file is 1–2 ms.
+    static let classifiedPagesPerFile = 16
+
+    /// Expected output size of a file being converted. Each scan page is
+    /// classified as the converter will (an estimate that called every scan
+    /// 1-bit put a photo print at 8 KB; it came out at 177 KB).
+    static func estimatedBytes(_ pages: [PageInfo], in doc: CGPDFDocument) -> Int {
+        let scans = pages.indices.filter {
+            if case .scan = pages[$0].kind { return true }
+            return false
         }
-        let px =
-            page.widthPt / 72 * assumedTextDpi * (page.heightPt / 72 * assumedTextDpi)
-        return max(8_000, Int(px * estimatedBytesPerPixel))
+        let step = max(1, (scans.count + classifiedPagesPerFile - 1) / classifiedPagesPerFile)
+        var photographic: [Int: Double] = [:]
+        for i in stride(from: 0, to: scans.count, by: step) {
+            photographic[scans[i]] = isPhotographic(doc.page(at: scans[i] + 1)) ? 1 : 0
+        }
+        let share =
+            photographic.isEmpty ? 0 : photographic.values.reduce(0, +) / Double(photographic.count)
+        return pages.indices.map {
+            estimatedPageBytes(pages[$0], photographic: photographic[$0] ?? share)
+        }.reduce(0, +)
+    }
+
+    private static func isPhotographic(_ page: CGPDFPage?) -> Bool {
+        let settings = Converter.Settings()
+        guard let page,
+            let probe = try? Converter.probe(
+                page, dpi: min(Converter.probeDpi, settings.dpiCap), clean: settings.removeScanEdges)
+        else { return false }
+        return PageClassifier.classify(probe) == .photo
+    }
+
+    /// Expected output size of one converted page, `photographic` being how
+    /// likely it is a photograph (1 or 0 when classified; a share when
+    /// inferred). Text pages scanned below the G4 resolution floor stay
+    /// grayscale at native resolution (mirroring the converter's dpi gate);
+    /// the converter may also demote adequate-resolution pages on
+    /// *measured* damage, which inspection can't predict — those come out
+    /// larger than estimated.
+    static func estimatedPageBytes(_ page: PageInfo, photographic: Double = 0) -> Int {
+        func bytes(dpi: Double, density: Double) -> Int {
+            max(8_000, Int(page.widthPt / 72 * dpi * (page.heightPt / 72 * dpi) * density))
+        }
+        let text: Int
+        if case let .scan(native, _) = page.kind, native < assumedMinG4Dpi {
+            text = bytes(dpi: Double(native), density: estimatedGray4BytesPerPixel)
+        } else {
+            text = bytes(dpi: assumedTextDpi, density: estimatedBytesPerPixel)
+        }
+        guard photographic > 0, case let .scan(native, _) = page.kind else { return text }
+        let photo = bytes(dpi: Double(min(native, assumedPhotoDpi)), density: estimatedPhotoBytesPerPixel)
+        return Int((1 - photographic) * Double(text) + photographic * Double(photo))
     }
 
     /// True when the document's Info Producer names this app — output we

@@ -220,14 +220,8 @@ public enum Converter {
         // resolution, up to the photo cap.
         let textDpi = max(72, settings.dpiCap)
         let probeRenderDpi = min(probeDpi, textDpi)
-        var probe = try PDFRender.gray(page: page, dpi: probeRenderDpi)
         let probeCleaned = settings.removeScanEdges
-        if probeCleaned {
-            // Clean before classifying: a heavy edge band would
-            // otherwise read as photo content — the one path where
-            // the cleanup would never run.
-            EdgeClean.removeScanBorders(&probe, dpi: probeRenderDpi)
-        }
+        let probe = try Self.probe(page, dpi: probeRenderDpi, clean: probeCleaned)
 
         // The one seam for obtaining a page render: callers state the
         // cleaning policy and cannot skip or wrongly inherit it — the
@@ -313,6 +307,18 @@ public enum Converter {
             words = try OCR.recognize(cgImage: img)
         }
         return PDFWriter.Page(content: content, dpi: dpi, ocrWords: words)
+    }
+
+    /// The cheap render a page is classified on. Cleaned first when asked: a
+    /// heavy edge band would otherwise read as photo content — the one path
+    /// where the cleanup would never run. Shared with PDFInspector's size
+    /// estimate, so both make the same call.
+    static func probe(_ page: CGPDFPage, dpi: Int, clean: Bool) throws -> Pipeline.GrayImage {
+        var probe = try PDFRender.gray(page: page, dpi: dpi)
+        if clean {
+            EdgeClean.removeScanBorders(&probe, dpi: dpi)
+        }
+        return probe
     }
 
     /// The writer is hand-rolled: a file Quartz can't open, or one that

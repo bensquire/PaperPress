@@ -66,6 +66,24 @@ final class PDFInspectorTests: FixtureTestCase {
         XCTAssertEqual(report.verdict, .convert)
     }
 
+    func test_inspect_photoPage_isEstimatedAsAPhotograph() throws {
+        // Arrange — a continuous-tone page, which the converter keeps as JPEG
+        let page = Fixtures.photoPage(width: 1240, height: 1754)
+        let url = Fixtures.write(
+            Fixtures.scannedPDF(pages: [page], dpi: 150), to: dir, name: "photo.pdf")
+
+        // Act
+        let report = try PDFInspector.inspect(url)
+
+        // Assert — estimated as the photograph it is, not as 1-bit text
+        XCTAssertEqual(report.verdict, .convert, "fixture sanity")
+        XCTAssertEqual(
+            report.estimatedBytes,
+            PDFInspector.estimatedPageBytes(report.pages[0], photographic: 1))
+        XCTAssertNotEqual(
+            report.estimatedBytes, PDFInspector.estimatedPageBytes(report.pages[0]))
+    }
+
     func test_inspect_g4PDF_passesThroughAsAlreadyCompact() throws {
         // Arrange
         let page = Fixtures.textPage(width: 1240, height: 1754)
