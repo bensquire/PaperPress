@@ -22,6 +22,8 @@ public enum PDFInspector {
         /// size the converted page comes out at.
         public let widthPt: Double
         public let heightPt: Double
+
+        var area: Double { widthPt * heightPt }
     }
 
     public enum Verdict: Equatable, Sendable, Codable {
@@ -52,7 +54,8 @@ public enum PDFInspector {
     /// converting.
     public static let smallEnoughBytesPerPage = 45_000
     /// Expected G4 output density at scan resolution — measured ~20 KB for
-    /// a text A4 at 300 dpi (8.7 Mpx). Drives the review-table estimate.
+    /// a sparse text A4 at 300 dpi (8.7 Mpx). For text pages the estimate
+    /// doesn't render (see estimatedOneBitBytes).
     static let estimatedBytesPerPixel = 0.0023
 
     /// Inspects many files at once — parsing, a few milliseconds a file — and
@@ -157,49 +160,86 @@ public enum PDFInspector {
 
     /// Expected output size of a file being converted. Each scan page is
     /// classified as the converter will (an estimate that called every scan
-    /// 1-bit put a photo print at 8 KB; it came out at 177 KB).
+    /// 1-bit put a photo print at 8 KB; it came out at 177 KB), and a text
+    /// page's 1-bit size is measured from the same render. Pages not
+    /// sampled take the sampled share of photographs and the sampled text
+    /// pages' bytes per square point.
     static func estimatedBytes(_ pages: [PageInfo], in doc: CGPDFDocument) -> Int {
         let scans = pages.indices.filter {
             if case .scan = pages[$0].kind { return true }
             return false
         }
         let step = max(1, (scans.count + classifiedPagesPerFile - 1) / classifiedPagesPerFile)
-        var photographic: [Int: Double] = [:]
+        var sampled: [Int: Sample] = [:]
         for i in stride(from: 0, to: scans.count, by: step) {
-            photographic[scans[i]] = isPhotographic(doc.page(at: scans[i] + 1)) ? 1 : 0
+            sampled[scans[i]] = sample(doc.page(at: scans[i] + 1))
         }
         let share =
-            photographic.isEmpty ? 0 : photographic.values.reduce(0, +) / Double(photographic.count)
-        return pages.indices.map {
-            estimatedPageBytes(pages[$0], photographic: photographic[$0] ?? share)
+            sampled.isEmpty
+            ? 0 : Double(sampled.values.filter(\.photographic).count) / Double(sampled.count)
+        let measured = sampled.compactMap { i, s in s.oneBitBytes.map { (bytes: $0, area: pages[i].area) } }
+        let oneBitPerArea =
+            measured.isEmpty
+            ? nil
+            : Double(measured.map(\.bytes).reduce(0, +)) / measured.map(\.area).reduce(0, +)
+        return pages.indices.map { i in
+            if let s = sampled[i] {
+                return estimatedPageBytes(
+                    pages[i], photographic: s.photographic ? 1 : 0, oneBit: s.oneBitBytes)
+            }
+            return estimatedPageBytes(
+                pages[i], photographic: share, oneBit: oneBitPerArea.map { Int($0 * pages[i].area) })
         }.reduce(0, +)
     }
 
-    private static func isPhotographic(_ page: CGPDFPage?) -> Bool {
+    private struct Sample {
+        let photographic: Bool
+        /// Measured for text pages only.
+        let oneBitBytes: Int?
+    }
+
+    private static func sample(_ page: CGPDFPage?) -> Sample? {
         let settings = Converter.Settings()
-        guard let page,
-            let probe = try? Converter.probe(
-                page, dpi: min(Converter.probeDpi, settings.dpiCap), clean: settings.removeScanEdges)
-        else { return false }
-        return PageClassifier.classify(probe) == .photo
+        let dpi = min(Converter.probeDpi, settings.dpiCap)
+        guard let page, let probe = try? Converter.probe(page, dpi: dpi, clean: settings.removeScanEdges)
+        else { return nil }
+        let photographic = PageClassifier.classify(probe) == .photo
+        return Sample(
+            photographic: photographic,
+            oneBitBytes: photographic ? nil : estimatedOneBitBytes(probe, dpi: dpi))
+    }
+
+    /// A text page's 1-bit output, from the classification render G4-encoded
+    /// as the converter would and scaled to text resolution: G4 grows about
+    /// in step with resolution (more rows, much the same codes a row). On
+    /// 17 files (4–18 pt type, 150–300 dpi scans) that came within 13% of
+    /// what converting wrote, OCR layer and all, but for a near-empty form
+    /// (2 KB under); counting ink edges instead missed small and large type
+    /// by up to 64%, and a flat 0.0023 bytes a pixel put a dense letter at a
+    /// third of its size.
+    static func estimatedOneBitBytes(_ probe: Pipeline.GrayImage, dpi: Int) -> Int? {
+        guard let g4 = try? Converter.encodeG4(binarized: Binarize.sauvola(probe, dpi: dpi), dpi: dpi)
+        else { return nil }
+        return Int(Double(g4.data.count) * assumedTextDpi / Double(dpi))
     }
 
     /// Expected output size of one converted page, `photographic` being how
     /// likely it is a photograph (1 or 0 when classified; a share when
-    /// inferred). Text pages scanned below the G4 resolution floor stay
+    /// inferred), and `oneBit` its 1-bit size when measured. Text pages
+    /// scanned below the G4 resolution floor stay
     /// grayscale at native resolution (mirroring the converter's dpi gate);
     /// the converter may also demote adequate-resolution pages on
     /// *measured* damage, which inspection can't predict — those come out
     /// larger than estimated.
-    static func estimatedPageBytes(_ page: PageInfo, photographic: Double = 0) -> Int {
+    static func estimatedPageBytes(_ page: PageInfo, photographic: Double = 0, oneBit: Int? = nil) -> Int {
         func bytes(dpi: Double, density: Double) -> Int {
-            max(8_000, Int(page.widthPt / 72 * dpi * (page.heightPt / 72 * dpi) * density))
+            max(8_000, Int(page.area / 5184 * dpi * dpi * density))
         }
         let text: Int
         if case let .scan(native, _) = page.kind, native < assumedMinG4Dpi {
             text = bytes(dpi: Double(native), density: estimatedGray4BytesPerPixel)
         } else {
-            text = bytes(dpi: assumedTextDpi, density: estimatedBytesPerPixel)
+            text = oneBit ?? bytes(dpi: assumedTextDpi, density: estimatedBytesPerPixel)
         }
         guard photographic > 0, case let .scan(native, _) = page.kind else { return text }
         let photo = bytes(dpi: Double(min(native, assumedPhotoDpi)), density: estimatedPhotoBytesPerPixel)

@@ -84,6 +84,27 @@ final class PDFInspectorTests: FixtureTestCase {
             report.estimatedBytes, PDFInspector.estimatedPageBytes(report.pages[0]))
     }
 
+    func test_inspect_textPage_isEstimatedFromItsInk() throws {
+        // Arrange — a dense page of small type, scanned at 150 dpi
+        let url = Fixtures.write(
+            Fixtures.scannedPDF(pages: [Fixtures.renderedTextPage(fontSize: 9, ink: 0.1)], dpi: 150),
+            to: dir, name: "dense.pdf")
+        let out = dir.appendingPathComponent("out.pdf")
+
+        // Act
+        let report = try PDFInspector.inspect(url)
+        let converted = try Converter.convert(report: report, to: out)
+
+        // Assert — near what converting writes (a flat rate a pixel was
+        // well under it)
+        guard case .converted([.g4]) = converted.outcome else {
+            return XCTFail("fixture should convert to 1-bit, got \(converted.outcome)")
+        }
+        let ratio = Double(report.estimatedBytes) / Double(converted.outputBytes)
+        XCTAssertEqual(
+            ratio, 1, accuracy: 0.3, "estimated \(report.estimatedBytes), wrote \(converted.outputBytes)")
+    }
+
     func test_inspect_g4PDF_passesThroughAsAlreadyCompact() throws {
         // Arrange
         let page = Fixtures.textPage(width: 1240, height: 1754)
