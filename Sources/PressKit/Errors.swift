@@ -25,8 +25,7 @@ public enum PressError: LocalizedError {
     }
 }
 
-/// Compatibility name so the pipeline files copied from PaperDrop's ScanKit
-/// (Pipeline, G4, OCR, ImageHelpers; PDFWriter has since diverged with the
-/// gray4Flate case) diff cleanly against their originals. New code uses
-/// PressError.
+/// Compatibility name so the two pipeline files copied from PaperDrop's
+/// ScanKit that still throw it (Pipeline, G4) diff cleanly against their
+/// originals. New code uses PressError.
 public typealias ScanError = PressError

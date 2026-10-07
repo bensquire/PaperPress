@@ -6,6 +6,24 @@ import XCTest
 
 @MainActor
 class AppModelTestCase: FixtureTestCase {
+    /// What the model's @AppStorage keeps in the test process's own defaults:
+    /// cleared before and after each test, so none sees another's settings.
+    nonisolated private static let storedKeys = [
+        SettingsStore.dpiCap, SettingsStore.photoDpiCap, SettingsStore.ocr,
+        SettingsStore.jpegQuality, SettingsStore.minSavingPercent, SettingsStore.demotedTextFormat,
+        SettingsStore.removeScanEdges, Automation.approvesJobsKey,
+    ]
+
+    override func setUp() {
+        super.setUp()
+        Self.storedKeys.forEach(UserDefaults.standard.removeObject(forKey:))
+    }
+
+    override func tearDown() {
+        Self.storedKeys.forEach(UserDefaults.standard.removeObject(forKey:))
+        super.tearDown()
+    }
+
     func makeModel() -> AppModel {
         let model = AppModel()
         model.ocrEnabled = false
@@ -19,13 +37,13 @@ class AppModelTestCase: FixtureTestCase {
     /// (@nonobjc: an async method on an NSObject subclass otherwise gets an
     /// Objective-C thunk, which would let the condition escape.)
     @nonobjc func waitFor(
-        _ what: String, timeout: TimeInterval = 30,
-        _ condition: () -> Bool
+        _ what: String, timeout: TimeInterval = 30, file: StaticString = #filePath,
+        line: UInt = #line, _ condition: () -> Bool
     ) async throws {
         let deadline = Date().addingTimeInterval(timeout)
         while !condition() {
             guard Date() < deadline else {
-                XCTFail("timed out waiting for \(what)")
+                XCTFail("timed out after \(Int(timeout)) s waiting for \(what)", file: file, line: line)
                 throw TimedOut()
             }
             try await Task.sleep(nanoseconds: 50_000_000)
@@ -33,20 +51,24 @@ class AppModelTestCase: FixtureTestCase {
     }
 
     /// A model holding an analysed window batch of `files` in `in/`.
-    func reviewedModel(_ files: [String: Data]) async throws -> AppModel {
+    func reviewedModel(
+        _ files: [String: Data], file: StaticString = #filePath, line: UInt = #line
+    ) async throws -> AppModel {
         let src = dir.appendingPathComponent("in")
         for (name, data) in files { Fixtures.write(data, to: src, name: name) }
         let model = makeModel()
         model.analyse(urls: [src])
-        try await waitFor("review") { model.phase == .review }
+        try await waitFor("review", file: file, line: line) { model.phase == .review }
         return model
     }
 
     /// The model's one job, once it's over.
-    func finishedJob(_ model: AppModel, _ id: UUID? = nil) async throws -> Job {
-        let id = try XCTUnwrap(id ?? model.jobs.first?.id)
-        try await waitFor("job over") { model.job(id)?.state.isTerminal == true }
-        return try XCTUnwrap(model.job(id))
+    func finishedJob(
+        _ model: AppModel, _ id: UUID? = nil, file: StaticString = #filePath, line: UInt = #line
+    ) async throws -> Job {
+        let id = try XCTUnwrap(id ?? model.jobs.first?.id, "no job queued", file: file, line: line)
+        try await waitFor("job over", file: file, line: line) { model.job(id)?.state.isTerminal == true }
+        return try XCTUnwrap(model.job(id), "job \(id) left the queue", file: file, line: line)
     }
 }
 
@@ -59,12 +81,13 @@ final class AppModelTests: AppModelTestCase {
 
         // Assert — verdicts assigned, pass-through unticked
         XCTAssertEqual(model.rows.count, 2)
-        let scan = try XCTUnwrap(model.rows.first { $0.id == "scan.pdf" })
-        let digital = try XCTUnwrap(model.rows.first { $0.id == "digital.pdf" })
+        let scan = try XCTUnwrap(model.rows.first { $0.id == "scan.pdf" }, "no row for scan.pdf")
+        let digital = try XCTUnwrap(
+            model.rows.first { $0.id == "digital.pdf" }, "no row for digital.pdf")
         XCTAssertEqual(scan.report?.verdict, .convert)
-        XCTAssertTrue(scan.included)
+        XCTAssertTrue(scan.included, "a scan to convert should be ticked")
         XCTAssertEqual(digital.report?.verdict, .passThrough(.bornDigital))
-        XCTAssertFalse(digital.included)
+        XCTAssertFalse(digital.included, "a born-digital file should be unticked")
     }
 
     func test_open_duringReview_appendsAndDedupes() async throws {
@@ -98,7 +121,9 @@ final class AppModelTests: AppModelTestCase {
 
         // Assert — both files, both analysed
         XCTAssertEqual(model.rows.map(\.id).sorted(), ["a.pdf", "b.pdf"])
-        XCTAssertTrue(model.rows.allSatisfy(\.analysed))
+        XCTAssertTrue(
+            model.rows.allSatisfy(\.analysed),
+            "unanalysed: \(model.rows.filter { !$0.analysed }.map(\.id))")
     }
 
     func test_cancel_duringAnalysis_dropsRowsWithoutAVerdict() {
@@ -140,8 +165,8 @@ final class AppModelTests: AppModelTestCase {
         // Assert — refused up front, nothing queued, original untouched
         XCTAssertFalse(started, "conversion should not start")
         XCTAssertEqual(model.phase, .review)
-        XCTAssertTrue(model.jobs.isEmpty)
-        XCTAssertNotNil(model.errorText)
+        XCTAssertTrue(model.jobs.isEmpty, "\(model.jobs.count) jobs queued")
+        XCTAssertNotNil(model.errorText, "the refusal should say why")
         XCTAssertEqual(try Data(contentsOf: other), before, "original should be untouched")
     }
 
@@ -170,10 +195,10 @@ final class QueueTests: AppModelTestCase {
         model.convertIfSafe(to: dir.appendingPathComponent("out"))
 
         // Assert — the batch is a job, shown; the window batch is empty again
-        let job = try XCTUnwrap(model.jobs.first)
+        let job = try XCTUnwrap(model.jobs.first, "the batch wasn't queued")
         XCTAssertEqual(model.selection, .job(job.id))
         XCTAssertEqual(model.phase, .idle)
-        XCTAssertTrue(model.rows.isEmpty)
+        XCTAssertTrue(model.rows.isEmpty, "the window still holds \(model.rows.map(\.id))")
         XCTAssertEqual(job.source, .window)
     }
 
@@ -195,8 +220,9 @@ final class QueueTests: AppModelTestCase {
             XCTAssertTrue(
                 FileManager.default.fileExists(atPath: out.appendingPathComponent(name).path), name)
         }
-        let scan = try XCTUnwrap(job.files.first { $0.id == "scan.pdf" })
-        let digital = try XCTUnwrap(job.files.first { $0.id == "digital.pdf" })
+        let scan = try XCTUnwrap(job.files.first { $0.id == "scan.pdf" }, "no result for scan.pdf")
+        let digital = try XCTUnwrap(
+            job.files.first { $0.id == "digital.pdf" }, "no result for digital.pdf")
         XCTAssertEqual(scan.result?.outcome, .converted([.gray4]))
         XCTAssertEqual(digital.result?.outcome, .copied(.passThrough))
         XCTAssertEqual(job.totals.converted, 1)
@@ -210,10 +236,10 @@ final class QueueTests: AppModelTestCase {
         let out = dir.appendingPathComponent("out")
         model.queueIsPaused = true
         model.convertIfSafe(to: out)
-        let waiting = try XCTUnwrap(model.jobs.first)
+        let waiting = try XCTUnwrap(model.jobs.first, "the batch wasn't queued")
 
         // Act / Assert — no result yet: preview shows the source
-        let row = try XCTUnwrap(waiting.files.first)
+        let row = try XCTUnwrap(waiting.files.first, "the queued batch has no files")
         XCTAssertEqual(model.previewURL(for: row, in: waiting), row.item.url)
 
         // Arrange — let it run
@@ -222,7 +248,7 @@ final class QueueTests: AppModelTestCase {
 
         // Act / Assert — result recorded: preview shows the written output
         XCTAssertEqual(
-            model.previewURL(for: try XCTUnwrap(job.files.first), in: job),
+            model.previewURL(for: try XCTUnwrap(job.files.first, "the job has no files"), in: job),
             out.appendingPathComponent("scan.pdf")
         )
     }
@@ -332,12 +358,12 @@ final class QueueTests: AppModelTestCase {
         _ = try await finishedJob(model)
 
         // Act — what the queue's list sends an assistant
-        let summary = try XCTUnwrap(model.summaries().first)
+        let summary = try XCTUnwrap(model.summaries().first, "no summary for the finished batch")
 
         // Assert — the counts survive without the file list
-        XCTAssertTrue(summary.files.isEmpty)
+        XCTAssertTrue(summary.files.isEmpty, "a summary carried \(summary.files.count) files")
         XCTAssertEqual(summary.totals.converted, 1)
-        XCTAssertGreaterThan(summary.totals.inputBytes, 0)
+        XCTAssertGreaterThan(summary.totals.inputBytes, 0, "the summary lost the input size")
     }
 
     func test_clearFinishedJobs_keepsUnfinishedOnes() async throws {
@@ -367,18 +393,15 @@ final class QueueTests: AppModelTestCase {
         model.analyse(urls: [src])
         try await waitFor("review of \(name)") { model.phase == .review }
         model.convertIfSafe(to: dir.appendingPathComponent("out-\(name)"))
-        guard case .job(let id) = model.selection else { throw TimedOut() }
+        guard case .job(let id) = model.selection else {
+            XCTFail("batch \(name) wasn't queued; the window shows \(model.selection)")
+            throw TimedOut()
+        }
         return id
     }
 }
 
 final class AssistantJobTests: AppModelTestCase {
-    override func tearDown() {
-        // Stored in the test process's defaults by @AppStorage.
-        UserDefaults.standard.removeObject(forKey: "approvesAssistantJobs")
-        super.tearDown()
-    }
-
     private func sources() -> URL {
         let src = dir.appendingPathComponent("in")
         Fixtures.write(Fixtures.lowResTextScanPDF(), to: src, name: "scan.pdf")
@@ -399,9 +422,12 @@ final class AssistantJobTests: AppModelTestCase {
         // window untouched
         XCTAssertEqual(accepted.state, .analysing)
         XCTAssertEqual(job.state, .finished)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: out.appendingPathComponent("scan.pdf").path))
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: out.appendingPathComponent("scan.pdf").path),
+            "the scan should be written")
         XCTAssertFalse(
-            FileManager.default.fileExists(atPath: out.appendingPathComponent("digital.pdf").path))
+            FileManager.default.fileExists(atPath: out.appendingPathComponent("digital.pdf").path),
+            "the born-digital file should be left out")
         XCTAssertEqual(model.selection, .draft)
         XCTAssertEqual(job.source, .assistant)
     }
@@ -418,7 +444,8 @@ final class AssistantJobTests: AppModelTestCase {
 
         // Assert
         XCTAssertTrue(
-            FileManager.default.fileExists(atPath: out.appendingPathComponent("digital.pdf").path))
+            FileManager.default.fileExists(atPath: out.appendingPathComponent("digital.pdf").path),
+            "the born-digital file should be copied with copy_unchanged")
     }
 
     func test_submit_withApproval_waitsForIt() async throws {
@@ -447,8 +474,10 @@ final class AssistantJobTests: AppModelTestCase {
 
         // Assert
         XCTAssertEqual(job.state, .failed)
-        XCTAssertNotNil(job.failure)
-        XCTAssertEqual(try Data(contentsOf: src.appendingPathComponent("scan.pdf")), before)
+        XCTAssertNotNil(job.failure, "the failed job should say why")
+        XCTAssertEqual(
+            try Data(contentsOf: src.appendingPathComponent("scan.pdf")), before,
+            "the original should be untouched")
     }
 
     func test_approve_afterTickingAFileOntoAnOriginal_refuses() async throws {
@@ -471,10 +500,10 @@ final class AssistantJobTests: AppModelTestCase {
         model.approve(accepted.id)
 
         // Assert — held, with the reason, and the original untouched
-        let job = try XCTUnwrap(model.job(accepted.id))
+        let job = try XCTUnwrap(model.job(accepted.id), "the job left the queue")
         XCTAssertEqual(job.state, .awaitingApproval)
-        XCTAssertNotNil(job.failure)
-        XCTAssertEqual(try Data(contentsOf: original), before)
+        XCTAssertNotNil(job.failure, "the held job should say why")
+        XCTAssertEqual(try Data(contentsOf: original), before, "the original should be untouched")
     }
 
     func test_submit_overridesChangeOnlyWhatTheyName() throws {
@@ -490,9 +519,9 @@ final class AssistantJobTests: AppModelTestCase {
                 overrides: SettingsOverrides(ocr: false)))
 
         // Assert — the user's resolution kept, OCR off
-        let settings = try XCTUnwrap(model.job(accepted.id)).settings
+        let settings = try XCTUnwrap(model.job(accepted.id), "the job wasn't queued").settings
         XCTAssertEqual(settings.dpiCap, 200)
-        XCTAssertFalse(settings.ocr)
+        XCTAssertFalse(settings.ocr, "the override should turn OCR off")
     }
 
     func test_updates_followAJobToItsEnd() async throws {

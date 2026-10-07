@@ -110,7 +110,7 @@ final class PaperPressToolsTests: FixtureTestCase {
         XCTAssertTrue(text.contains("2 PDFs: 1 to re-compress"), text)
         XCTAssertTrue(text.contains("1 born digital"), text)
         XCTAssertEqual(result.structured?["files"]?.array?.count, 2)
-        XCTAssertTrue(link.sent.isEmpty)
+        XCTAssertTrue(link.sent.isEmpty, "analyse asked the app: \(link.sent)")
     }
 
     func test_analyse_fromAReplacedHelper_saysItIsTheOlderVersion() async throws {
@@ -125,7 +125,7 @@ final class PaperPressToolsTests: FixtureTestCase {
 
         // Assert — answered, and said first
         XCTAssertEqual(result.text.first, PaperPressTools.replacedNote)
-        XCTAssertTrue(result.text.dropFirst().joined().contains("re-compress"))
+        XCTAssertTrue(result.text.dropFirst().joined().contains("re-compress"), "\(result.text)")
     }
 
     func test_analyse_missingPath_isAnErrorNamingIt() async throws {
@@ -133,7 +133,7 @@ final class PaperPressToolsTests: FixtureTestCase {
         let result = try await call(tools(silentApp), "analyse", ["paths": ["nowhere"]])
 
         // Assert
-        XCTAssertTrue(result.isError)
+        XCTAssertTrue(result.isError, "should be an error, got \(result.text)")
         XCTAssertTrue(result.text.joined().contains("nowhere"), "\(result.text)")
     }
 
@@ -151,7 +151,7 @@ final class PaperPressToolsTests: FixtureTestCase {
         // Assert — a PNG within the size a model is shown, and the encoding named
         XCTAssertFalse(result.isError, "\(result.text)")
         XCTAssertTrue(result.text.joined().contains("1-bit (CCITT G4) at 300 dpi"), "\(result.text)")
-        let image = try XCTUnwrap(result.images.first)
+        let image = try XCTUnwrap(result.images.first, "no picture in \(result.text)")
         XCTAssertEqual(image.mimeType, "image/png")
         let size = try pixelSize(image.data)
         XCTAssertEqual(Int(max(size.width, size.height)), PaperPressTools.previewMaxPixels)
@@ -172,9 +172,9 @@ final class PaperPressToolsTests: FixtureTestCase {
             ])
 
         // Assert — 248 × 351 px: the region at the encoded 300 dpi, not scaled
-        let size = try pixelSize(try XCTUnwrap(result.images.first).data)
-        XCTAssertEqual(size.width, 248, accuracy: 1)
-        XCTAssertEqual(size.height, 351, accuracy: 1)
+        let size = try pixelSize(try XCTUnwrap(result.images.first, "no picture in \(result.text)").data)
+        XCTAssertEqual(size.width, 248, accuracy: 1, "picture width in pixels")
+        XCTAssertEqual(size.height, 351, accuracy: 1, "picture height in pixels")
     }
 
     func test_preview_lowResText_saysItStaysGrayscale() async throws {
@@ -198,12 +198,18 @@ final class PaperPressToolsTests: FixtureTestCase {
         // Assert
         XCTAssertFalse(result.isError, "\(result.text)")
         XCTAssertTrue(result.text.joined().contains("unchanged (born digital)"), "\(result.text)")
-        XCTAssertNotNil(result.images.first)
+        XCTAssertNotNil(result.images.first, "no picture of the page in \(result.text)")
     }
 
-    private func pixelSize(_ png: Data) throws -> (width: Double, height: Double) {
-        let source = try XCTUnwrap(CGImageSourceCreateWithData(png as CFData, nil))
-        let image = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
+    private func pixelSize(
+        _ png: Data, file: StaticString = #filePath, line: UInt = #line
+    ) throws -> (width: Double, height: Double) {
+        let source = try XCTUnwrap(
+            CGImageSourceCreateWithData(png as CFData, nil), "the picture isn't an image",
+            file: file, line: line)
+        let image = try XCTUnwrap(
+            CGImageSourceCreateImageAtIndex(source, 0, nil), "the picture has no frame to decode",
+            file: file, line: line)
         return (Double(image.width), Double(image.height))
     }
 
@@ -297,7 +303,7 @@ final class PaperPressToolsTests: FixtureTestCase {
             ["paths": [.string(src.path)], "output": "/out"])
 
         // Assert
-        XCTAssertTrue(result.isError)
+        XCTAssertTrue(result.isError, "should be an error, got \(result.text)")
         XCTAssertTrue(result.text.joined().contains("not installed"), "\(result.text)")
     }
 
@@ -310,7 +316,7 @@ final class PaperPressToolsTests: FixtureTestCase {
             tools(silentApp), "convert", ["paths": [.string(src.path)], "output": "/out"])
 
         // Assert
-        XCTAssertTrue(result.isError)
+        XCTAssertTrue(result.isError, "should be an error, got \(result.text)")
         XCTAssertTrue(result.text.joined().contains("Settings › Assistants"), "\(result.text)")
     }
 
@@ -324,7 +330,7 @@ final class PaperPressToolsTests: FixtureTestCase {
             tools(link), "convert", ["paths": [.string(src.path)], "output": "/out"])
 
         // Assert
-        XCTAssertTrue(result.isError)
+        XCTAssertTrue(result.isError, "should be an error, got \(result.text)")
         XCTAssertTrue(result.text.joined().contains("protocol"), "\(result.text)")
     }
 
@@ -333,7 +339,7 @@ final class PaperPressToolsTests: FixtureTestCase {
         let result = try await call(tools(silentApp), "jobs", [:])
 
         // Assert
-        XCTAssertTrue(result.isError)
+        XCTAssertTrue(result.isError, "should be an error, got \(result.text)")
         XCTAssertTrue(result.text.joined().contains("not running"), "\(result.text)")
     }
 }
@@ -366,13 +372,18 @@ final class AssistantEndToEndTests: AppModelTestCase {
         super.tearDown()
     }
 
-    private func listeningModel() async throws -> (AppModel, String) {
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
-        defaults.set(true, forKey: "assistantsEnabled")
+    private func listeningModel(
+        file: StaticString = #filePath, line: UInt = #line
+    ) async throws -> (AppModel, String) {
+        let defaults = try XCTUnwrap(
+            UserDefaults(suiteName: suite), "no defaults suite \(suite)", file: file, line: line)
+        defaults.set(true, forKey: Automation.enabledKey)
         let path = socketFolder.appendingPathComponent("s.sock").path
         let model = AppModel(defaults: defaults, socketPath: path)
         model.ocrEnabled = false
-        try await waitFor("listening") { model.automation.state == .listening }
+        try await waitFor("listening", file: file, line: line) {
+            model.automation.state == .listening
+        }
         return (model, path)
     }
 
@@ -394,7 +405,9 @@ final class AssistantEndToEndTests: AppModelTestCase {
         // Assert — written, reported, and the job in the window's queue
         XCTAssertFalse(result.isError, "\(result.text)")
         XCTAssertTrue(result.text.joined().contains("1 converted"), "\(result.text)")
-        XCTAssertTrue(FileManager.default.fileExists(atPath: out.appendingPathComponent("scan.pdf").path))
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: out.appendingPathComponent("scan.pdf").path),
+            "the converted scan should be written")
         XCTAssertEqual(model.jobs.first?.source, .assistant)
     }
 

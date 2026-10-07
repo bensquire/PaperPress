@@ -49,7 +49,7 @@ final class BinarizeTests: XCTestCase {
         let bw = Binarize.sauvola(page, dpi: 300)
 
         // Assert
-        XCTAssertFalse(bw.ink.contains(true))
+        XCTAssertFalse(bw.ink.contains(true), "\(bw.ink.count { $0 }) ink pixels on a blank page")
     }
 
     func test_sauvola_matchesOtsuOnCleanBimodalPage() {
@@ -63,7 +63,9 @@ final class BinarizeTests: XCTestCase {
 
         // Assert — over 99% of pixels agree
         let disagree = zip(adaptive.ink, global.ink).filter { $0 != $1 }.count
-        XCTAssertLessThan(Double(disagree) / Double(adaptive.ink.count), 0.01)
+        XCTAssertLessThan(
+            Double(disagree) / Double(adaptive.ink.count), 0.01,
+            "\(disagree) of \(adaptive.ink.count) pixels differ from Otsu")
     }
 
     func test_damage_cleanBinarisation_staysUnderShippedThreshold() {
@@ -75,7 +77,8 @@ final class BinarizeTests: XCTestCase {
         let damage = Binarize.damage(page, bw)
 
         // Assert — clearly under the shipped G4 fallback threshold
-        XCTAssertLessThan(damage, Converter.Settings().maxG4Damage - 0.05)
+        XCTAssertLessThan(
+            damage, Converter.Settings().maxG4Damage - 0.05, "damage \(damage) on a clean page")
     }
 
     func test_damage_calibrationAnchors_holdWithinTolerance() {
@@ -95,10 +98,10 @@ final class BinarizeTests: XCTestCase {
         let normalScore = Binarize.damage(normal, Binarize.sauvola(normal, dpi: 300))
 
         // Assert — each anchor holds its band, and the ordering holds
-        XCTAssertGreaterThan(tinyScore, 0.15)
-        XCTAssertLessThan(tinyScore, 0.35)
-        XCTAssertGreaterThan(normalScore, 0.12)
-        XCTAssertLessThan(normalScore, 0.30)
+        XCTAssertGreaterThan(tinyScore, 0.15, "tiny print's damage below its band")
+        XCTAssertLessThan(tinyScore, 0.35, "tiny print's damage above its band")
+        XCTAssertGreaterThan(normalScore, 0.12, "normal print's damage below its band")
+        XCTAssertLessThan(normalScore, 0.30, "normal print's damage above its band")
         XCTAssertGreaterThan(tinyScore, normalScore, "smaller print must score worse")
     }
 
@@ -114,7 +117,7 @@ final class BinarizeTests: XCTestCase {
         let damage = Binarize.damage(page, blank)
 
         // Assert — destroying all content must score far above the threshold
-        XCTAssertGreaterThan(damage, 0.4)
+        XCTAssertGreaterThan(damage, 0.4, "damage \(damage) for a page that lost every stroke")
     }
 
     func test_sauvola_bandedMatchesBruteForceReference() {

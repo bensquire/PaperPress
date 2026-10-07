@@ -29,8 +29,10 @@ final class ConverterTests: FixtureTestCase {
         let result = try await Converter.convert(report: report, to: out, settings: noOCR)
 
         // Assert
-        XCTAssertTrue(result.converted)
-        XCTAssertLessThan(result.outputBytes, result.inputBytes / 2)
+        XCTAssertTrue(result.converted, "got \(result.outcome)")
+        XCTAssertLessThan(
+            result.outputBytes, result.inputBytes / 2,
+            "\(result.outputBytes) bytes from \(result.inputBytes): less than half expected")
         XCTAssertEqual(result.outcome, .converted([.g4]))
         let written = try Data(contentsOf: out)
         XCTAssertNotNil(
@@ -60,7 +62,7 @@ final class ConverterTests: FixtureTestCase {
             written.range(of: Data("DCTDecode".utf8)),
             "photo page should stay JPEG"
         )
-        XCTAssertNil(written.range(of: Data("CCITTFaxDecode".utf8)))
+        XCTAssertNil(written.range(of: Data("CCITTFaxDecode".utf8)), "photo page shouldn't be G4")
     }
 
     func test_convert_passThroughVerdict_copiesFileByteIdentical() async throws {
@@ -75,7 +77,7 @@ final class ConverterTests: FixtureTestCase {
 
         // Assert
         XCTAssertEqual(result.outcome, .copied(.passThrough))
-        XCTAssertEqual(try Data(contentsOf: out), data)
+        XCTAssertEqual(try Data(contentsOf: out), data, "the copy should be byte-identical")
     }
 
     func test_convert_insufficientSaving_fallsBackToCopy() async throws {
@@ -96,7 +98,7 @@ final class ConverterTests: FixtureTestCase {
 
         // Assert
         XCTAssertEqual(result.outcome, .copied(.insufficientSaving))
-        XCTAssertEqual(try Data(contentsOf: out), srcData)
+        XCTAssertEqual(try Data(contentsOf: out), srcData, "the original should be copied byte-identical")
     }
 
     func test_convert_dpiCap_downsamplesHighResScan() async throws {
@@ -117,8 +119,8 @@ final class ConverterTests: FixtureTestCase {
         // Assert — rebuilt page images are 150dpi-sized (620px wide, in the
         // XObject header), not 2480
         let written = try Data(contentsOf: out)
-        XCTAssertNotNil(written.range(of: Data("/Width 620".utf8)))
-        XCTAssertNil(written.range(of: Data("/Width 2480".utf8)))
+        XCTAssertNotNil(written.range(of: Data("/Width 620".utf8)), "no 620 px (150 dpi) page image")
+        XCTAssertNil(written.range(of: Data("/Width 2480".utf8)), "a 2480 px page image survived the cap")
     }
 
     func test_convert_ontoItsOwnSource_throwsAndLeavesOriginalIntact() async throws {
@@ -132,7 +134,7 @@ final class ConverterTests: FixtureTestCase {
         await assertThrowsAsync(
             try await Converter.convert(report: report, to: src, settings: noOCR)
         )
-        XCTAssertEqual(try Data(contentsOf: src), data)
+        XCTAssertEqual(try Data(contentsOf: src), data, "the original should be untouched")
     }
 
     /// A 75 dpi text source — demoted by the resolution gate (the damage
@@ -156,8 +158,8 @@ final class ConverterTests: FixtureTestCase {
         // Assert — demoted, and encoded as 4-bit Flate, not JPEG
         XCTAssertEqual(result.outcome, .converted([.gray4]))
         let written = try Data(contentsOf: out)
-        XCTAssertNotNil(written.range(of: Data("/BitsPerComponent 4".utf8)))
-        XCTAssertNil(written.range(of: Data("DCTDecode".utf8)))
+        XCTAssertNotNil(written.range(of: Data("/BitsPerComponent 4".utf8)), "no 4-bit page image")
+        XCTAssertNil(written.range(of: Data("DCTDecode".utf8)), "a demoted text page went to JPEG")
     }
 
     func test_convert_lowResTextPage_staysGrayscaleEvenWhenCrisp() async throws {
@@ -179,7 +181,8 @@ final class ConverterTests: FixtureTestCase {
         // Assert
         XCTAssertEqual(result.outcome, .converted([.gray4]))
         XCTAssertNil(
-            try Data(contentsOf: out).range(of: Data("CCITTFaxDecode".utf8))
+            try Data(contentsOf: out).range(of: Data("CCITTFaxDecode".utf8)),
+            "a 75 dpi source should never be G4, however crisp"
         )
     }
 
@@ -230,8 +233,8 @@ final class ConverterTests: FixtureTestCase {
 
         // Assert
         let written = try Data(contentsOf: out)
-        XCTAssertNotNil(written.range(of: Data("DCTDecode".utf8)))
-        XCTAssertNil(written.range(of: Data("/BitsPerComponent 4".utf8)))
+        XCTAssertNotNil(written.range(of: Data("DCTDecode".utf8)), "the JPEG setting wasn't used")
+        XCTAssertNil(written.range(of: Data("/BitsPerComponent 4".utf8)), "a 4-bit image despite the setting")
     }
 
     func test_convert_damageDemotion_staysGrayscaleAtAdequateResolution() async throws {
@@ -255,8 +258,8 @@ final class ConverterTests: FixtureTestCase {
         // Assert — demoted by damage, not resolution, and grayscale
         XCTAssertEqual(result.outcome, .converted([.gray4]))
         let written = try Data(contentsOf: out)
-        XCTAssertNil(written.range(of: Data("CCITTFaxDecode".utf8)))
-        XCTAssertNotNil(written.range(of: Data("/BitsPerComponent 4".utf8)))
+        XCTAssertNil(written.range(of: Data("CCITTFaxDecode".utf8)), "a damaged page went to G4")
+        XCTAssertNotNil(written.range(of: Data("/BitsPerComponent 4".utf8)), "no 4-bit page image")
     }
 
     func test_convert_mixedDocument_encodesEachPageByKind() async throws {
@@ -277,8 +280,8 @@ final class ConverterTests: FixtureTestCase {
         // Assert — one G4 page, one JPEG page, in order
         XCTAssertEqual(result.outcome, .converted([.g4, .jpeg]))
         let written = try Data(contentsOf: out)
-        XCTAssertNotNil(written.range(of: Data("CCITTFaxDecode".utf8)))
-        XCTAssertNotNil(written.range(of: Data("DCTDecode".utf8)))
+        XCTAssertNotNil(written.range(of: Data("CCITTFaxDecode".utf8)), "the text page isn't G4")
+        XCTAssertNotNil(written.range(of: Data("DCTDecode".utf8)), "the photo page isn't JPEG")
     }
 
     func test_convert_preservesSourceModificationDate() async throws {
@@ -301,7 +304,7 @@ final class ConverterTests: FixtureTestCase {
         let outDate =
             try FileManager.default.attributesOfItem(atPath: out.path)[.modificationDate]
             as? Date
-        XCTAssertEqual(outDate, past)
+        XCTAssertEqual(outDate, past, "the output should keep the source's modification date")
     }
 
     // MARK: Destinations
@@ -408,7 +411,7 @@ final class ConverterTests: FixtureTestCase {
             try await Converter.convert(
                 report: report, to: dir.appendingPathComponent("LOOSE.PDF"), settings: noOCR)
         )
-        XCTAssertEqual(try Data(contentsOf: src), data)
+        XCTAssertEqual(try Data(contentsOf: src), data, "the original should be untouched")
     }
 
     // MARK: Page handling
@@ -430,9 +433,11 @@ final class ConverterTests: FixtureTestCase {
             report: try PDFInspector.inspect(cropped), to: out, settings: settings)
 
         // Assert — the hidden part stays hidden: the page is the crop
-        let media = try XCTUnwrap(CGPDFDocument(out as CFURL)?.page(at: 1)).getBoxRect(.mediaBox)
-        XCTAssertEqual(media.width, 300, accuracy: 1)
-        XCTAssertEqual(media.height, 400, accuracy: 1)
+        let media = try XCTUnwrap(
+            CGPDFDocument(out as CFURL)?.page(at: 1), "the output has no readable page"
+        ).getBoxRect(.mediaBox)
+        XCTAssertEqual(media.width, 300, accuracy: 1, "page width in points")
+        XCTAssertEqual(media.height, 400, accuracy: 1, "page height in points")
     }
 
     func test_convert_mixedFile_keepsVectorPagesAsTheyWere() async throws {
@@ -453,9 +458,10 @@ final class ConverterTests: FixtureTestCase {
         // Assert — page 1 copied, not rasterised: its text is still text,
         // and it draws exactly as the source did
         XCTAssertEqual(result.outcome, .converted([.original, .g4]))
-        XCTAssertTrue(Fixtures.pageText(of: out).contains("Vector cover sheet"))
+        XCTAssertTrue(
+            Fixtures.pageText(of: out).contains("Vector cover sheet"), "page 1's text should still be text")
         XCTAssertFalse(
-            try XCTUnwrap(Fixtures.contentStream(of: out)).contains("/Im0"),
+            try XCTUnwrap(Fixtures.contentStream(of: out), "page 1 has no content stream").contains("/Im0"),
             "page 1 should carry no raster image"
         )
         let before = try Fixtures.rendered(src, dpi: 72)
@@ -479,7 +485,7 @@ final class ConverterTests: FixtureTestCase {
                 return XCTFail("expected changedSinceAnalysis, got \($0)")
             }
         }
-        XCTAssertFalse(FileManager.default.fileExists(atPath: out.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: out.path), "nothing should be written")
     }
 
     func test_convert_cancelled_stopsAndWritesNothing() async throws {
@@ -504,7 +510,7 @@ final class ConverterTests: FixtureTestCase {
             XCTFail("a cancelled conversion should throw")
         } catch is CancellationError {
         }
-        XCTAssertFalse(FileManager.default.fileExists(atPath: out.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: out.path), "nothing should be written")
     }
 }
 
@@ -560,7 +566,7 @@ final class FolderScannerItemsTests: FixtureTestCase {
         )
 
         // Assert
-        XCTAssertEqual(items.count, 1)
+        XCTAssertEqual(items.count, 1, "got \(items.map(\.relativePath))")
     }
 
     func test_items_nonPDFLooseFile_isIgnored() {
@@ -571,7 +577,7 @@ final class FolderScannerItemsTests: FixtureTestCase {
         let items = FolderScanner.items(for: [txt])
 
         // Assert
-        XCTAssertTrue(items.isEmpty)
+        XCTAssertTrue(items.isEmpty, "got \(items.map(\.relativePath))")
     }
 
     func test_items_namesDifferingOnlyInCase_getNumberedSuffix() {
@@ -596,7 +602,7 @@ final class FolderScannerItemsTests: FixtureTestCase {
         let added = FolderScanner.items(for: [loose], merging: existing)
 
         // Assert
-        XCTAssertTrue(added.isEmpty)
+        XCTAssertTrue(added.isEmpty, "added again: \(added.map(\.relativePath))")
     }
 
     func test_items_mergingNameCollision_getsSuffixNotDropped() {

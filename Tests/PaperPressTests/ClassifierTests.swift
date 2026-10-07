@@ -80,8 +80,10 @@ final class PageClassifierTests: XCTestCase {
 
         // Assert — the paper's grain gone to white, the ink to black
         let paper = levelled.pixels.filter { $0 > 128 }
-        XCTAssertGreaterThan(Double(paper.count { $0 >= 250 }) / Double(paper.count), 0.9)
-        XCTAssertEqual(levelled.pixels.min(), 0)
+        XCTAssertGreaterThan(
+            Double(paper.count { $0 >= 250 }) / Double(paper.count), 0.9,
+            "\(paper.count { $0 >= 250 }) of \(paper.count) paper pixels white")
+        XCTAssertEqual(levelled.pixels.min(), 0, "the ink should come out black")
     }
 
     func test_levelled_withoutContrast_leavesThePageAlone() {
@@ -90,7 +92,7 @@ final class PageClassifierTests: XCTestCase {
             width: 100, height: 100, pixels: (0..<10_000).map { UInt8(200 + $0 % 5) })
 
         // Act / Assert
-        XCTAssertEqual(flat.levelled().pixels, flat.pixels)
+        XCTAssertEqual(flat.levelled().pixels, flat.pixels, "a page without contrast was changed")
     }
 
     func test_levelled_keepsStrokeWeight() {

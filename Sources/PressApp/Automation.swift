@@ -30,6 +30,8 @@ public final class Automation: ObservableObject {
     private var server: JobServer?
 
     static let enabledKey = "assistantsEnabled"
+    /// Whether an assistant's batch waits for approval in the window (AppModel).
+    nonisolated static let approvesJobsKey = "approvesAssistantJobs"
 
     public init(defaults: UserDefaults = .standard, socketPath: String = JobChannel.socketPath) {
         self.defaults = defaults

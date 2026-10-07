@@ -41,7 +41,7 @@ struct FileRow: Identifiable {
     private var verdictText: (label: String, help: String) {
         switch report?.verdict {
         case .convert:
-            ("Re-compress", "Scanned pages that will be re-compressed to compact 1-bit")
+            ("Re-compress", "Scanned pages that will be re-compressed, mostly to compact black and white")
         case .passThrough(let reason):
             (reason.label, Self.help(reason))
         case nil:
@@ -51,7 +51,7 @@ struct FileRow: Identifiable {
 
     private static func help(_ reason: PDFInspector.PassReason) -> String {
         switch reason {
-        case .bornDigital: "Real text/vector PDF — rasterising it would only make it worse"
+        case .bornDigital: "Made on a computer, not scanned — turning it into images would only make it worse"
         case .alreadyProcessed: "Produced by PaperPress — converting again would only re-encode it"
         case .alreadyCompact: "Pages are already archival-compact (1-bit or 4-bit)"
         case .alreadySmall: "Already compact for its page count"
@@ -95,7 +95,7 @@ struct FileRow: Identifiable {
                 "Converting saved too little — original copied unchanged"
             )
         case .copied(.passThrough):
-            return ("Copied", "Copied through byte-identical")
+            return ("Copied", "Copied unchanged: it didn't need converting")
         case nil:
             return ("—", "")
         }
@@ -171,7 +171,7 @@ public final class AppModel: ObservableObject {
     /// Hold an assistant's batch until it's approved in the window. Off, as in
     /// Prospect: the client already asks before every tool call; on for a
     /// second look at what will be written.
-    @AppStorage("approvesAssistantJobs") var approvesAssistantJobs = false
+    @AppStorage(Automation.approvesJobsKey) var approvesAssistantJobs = false
 
     /// Whether assistants can reach the queue, and the socket they reach it by.
     public let automation: Automation

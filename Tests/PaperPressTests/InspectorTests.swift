@@ -28,7 +28,9 @@ final class PDFInspectorTests: FixtureTestCase {
 
         // Assert
         XCTAssertEqual(report.verdict, .convert)
-        XCTAssertGreaterThan(report.fileBytes, PDFInspector.smallEnoughBytesPerPage)
+        XCTAssertGreaterThan(
+            report.fileBytes, PDFInspector.smallEnoughBytesPerPage,
+            "fixture sanity: \(report.fileBytes) bytes is already small")
     }
 
     func test_inspect_scanPage_reportsNativeDpi() throws {
@@ -46,7 +48,7 @@ final class PDFInspectorTests: FixtureTestCase {
             return XCTFail("expected a scan page, got \(report.pages[0].kind)")
         }
         XCTAssertEqual(dpi, 150)
-        XCTAssertFalse(compact)
+        XCTAssertFalse(compact, "an 8-bit JPEG scan isn't archival-compact")
     }
 
     func test_inspect_rotatedScanPage_isStillAScan() throws {
@@ -79,9 +81,11 @@ final class PDFInspectorTests: FixtureTestCase {
         XCTAssertEqual(report.verdict, .convert, "fixture sanity")
         XCTAssertEqual(
             report.estimatedBytes,
-            PDFInspector.estimatedPageBytes(report.pages[0], photographic: 1))
+            PDFInspector.estimatedPageBytes(report.pages[0], photographic: 1),
+            "the estimate should be the photograph's")
         XCTAssertNotEqual(
-            report.estimatedBytes, PDFInspector.estimatedPageBytes(report.pages[0]))
+            report.estimatedBytes, PDFInspector.estimatedPageBytes(report.pages[0]),
+            "estimated as a 1-bit text page")
     }
 
     func test_inspect_textPage_isEstimatedFromItsInk() async throws {

@@ -23,13 +23,19 @@ public enum Pipeline {
         let w = img.width, h = img.height
         var pixels = [UInt8](repeating: 0, count: w * h)
         let cs = CGColorSpaceCreateDeviceGray()
-        pixels.withUnsafeMutableBytes { buf in
-            let ctx = CGContext(
-                data: buf.baseAddress, width: w, height: h,
-                bitsPerComponent: 8, bytesPerRow: w, space: cs,
-                bitmapInfo: CGImageAlphaInfo.none.rawValue
-            )!
+        let drawn = pixels.withUnsafeMutableBytes { buf in
+            guard
+                let ctx = CGContext(
+                    data: buf.baseAddress, width: w, height: h,
+                    bitsPerComponent: 8, bytesPerRow: w, space: cs,
+                    bitmapInfo: CGImageAlphaInfo.none.rawValue
+                )
+            else { return false }
             ctx.draw(img, in: CGRect(x: 0, y: 0, width: w, height: h))
+            return true
+        }
+        guard drawn else {
+            throw ScanError.scanFailed("Cannot read image \(url.lastPathComponent)")
         }
         return GrayImage(width: w, height: h, pixels: pixels)
     }
@@ -441,7 +447,8 @@ public enum Pipeline {
         let rowBytes = (cw + 7) / 8
         var packed = Data(count: rowBytes * ch)
         packed.withUnsafeMutableBytes { buf in
-            let p = buf.bindMemory(to: UInt8.self).baseAddress!
+            // An empty crop has no buffer and nothing to pack.
+            guard let p = buf.bindMemory(to: UInt8.self).baseAddress else { return }
             for y in 0..<ch {
                 let src = (y + c.y0) * bw.width + c.x0
                 for x in 0..<cw where !bw.ink[src + x] {  // white bit = 1

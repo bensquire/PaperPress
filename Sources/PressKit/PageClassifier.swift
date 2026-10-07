@@ -44,8 +44,9 @@ public enum PageClassifier {
                 bandMass[c] += hist[v]
             }
         }
-        let peak = bandMass.indices.max(by: { bandMass[$0] < bandMass[$1] })!
-        guard peak >= minPaperLevel else { return .photo }
+        guard let peak = bandMass.indices.max(by: { bandMass[$0] < bandMass[$1] }),
+            peak >= minPaperLevel
+        else { return .photo }
         guard bandMass[peak] / total >= paperFractionThreshold else { return .photo }
 
         // Histogram shape isn't enough: gamma-skewed gradients can pack
@@ -66,11 +67,9 @@ public enum PageClassifier {
                 samples += 1
                 let v = Int(g.pixels[y * w + x])
                 if v >= midLo, v <= midHi {
-                    let n = [
-                        g.pixels[y * w + x - 1], g.pixels[y * w + x + 1],
-                        g.pixels[(y - 1) * w + x], g.pixels[(y + 1) * w + x],
-                    ]
-                    if Int(n.max()!) - Int(n.min()!) < 12 {
+                    let left = g.pixels[y * w + x - 1], right = g.pixels[y * w + x + 1]
+                    let up = g.pixels[(y - 1) * w + x], down = g.pixels[(y + 1) * w + x]
+                    if Int(max(left, right, up, down)) - Int(min(left, right, up, down)) < 12 {
                         smoothMid += 1
                     }
                 }

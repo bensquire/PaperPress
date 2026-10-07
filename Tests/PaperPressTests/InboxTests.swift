@@ -16,11 +16,13 @@ final class InboxTests: FixtureTestCase {
             at: inbox.appendingPathComponent("link"), withDestinationURL: outside.deletingLastPathComponent())
 
         // Act / Assert
-        XCTAssertTrue(Inbox.contains(file, in: inbox))
-        XCTAssertFalse(Inbox.contains(inbox, in: inbox))
-        XCTAssertFalse(Inbox.contains(dir.appendingPathComponent("Inbox2/c.pdf"), in: inbox))
-        XCTAssertFalse(Inbox.contains(outside, in: inbox))
-        XCTAssertFalse(Inbox.contains(inbox.appendingPathComponent("link/b.pdf"), in: inbox))
+        XCTAssertTrue(Inbox.contains(file, in: inbox), "a file in a subfolder")
+        XCTAssertFalse(Inbox.contains(inbox, in: inbox), "the inbox folder itself")
+        XCTAssertFalse(
+            Inbox.contains(dir.appendingPathComponent("Inbox2/c.pdf"), in: inbox), "a look-alike sibling")
+        XCTAssertFalse(Inbox.contains(outside, in: inbox), "a file elsewhere")
+        XCTAssertFalse(
+            Inbox.contains(inbox.appendingPathComponent("link/b.pdf"), in: inbox), "a file through a link")
         XCTAssertTrue(Inbox.contains(inbox.appendingPathComponent("link"), in: inbox), "the link itself")
     }
 
@@ -37,11 +39,11 @@ final class InboxTests: FixtureTestCase {
 
         // Assert
         let exists = { (url: URL) in FileManager.default.fileExists(atPath: url.path) }
-        XCTAssertFalse(exists(dropped))
+        XCTAssertFalse(exists(dropped), "the handed-in inbox file should go")
         XCTAssertFalse(exists(dropped.deletingLastPathComponent()), "emptied folder goes too")
-        XCTAssertTrue(exists(kept))
+        XCTAssertTrue(exists(kept), "a file it wasn't handed should stay")
         XCTAssertTrue(exists(outside), "never outside the inbox, even through a link")
-        XCTAssertTrue(exists(inbox))
+        XCTAssertTrue(exists(inbox), "the inbox itself should stay")
     }
 
     func test_sweep_deletesOnlyWhatHasWaitedADay() {
@@ -50,9 +52,9 @@ final class InboxTests: FixtureTestCase {
 
         // Act / Assert — kept today, gone two days on
         Inbox.sweep(inbox)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: file.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.path), "a fresh file was swept")
         Inbox.sweep(inbox, now: Date().addingTimeInterval(2 * Inbox.keptFor))
-        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path), "a two-day-old file was kept")
     }
 }
 
@@ -74,11 +76,15 @@ final class InboxJobTests: AppModelTestCase {
 
         // Assert — written out and gone from the inbox; the rest stay
         XCTAssertEqual(job.state, .finished)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: out.appendingPathComponent("scan.pdf").path))
-        XCTAssertFalse(FileManager.default.fileExists(atPath: dropped.path))
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: out.appendingPathComponent("scan.pdf").path),
+            "the inbox scan should be written out")
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: dropped.path), "written out, it should leave the inbox")
         XCTAssertTrue(
             FileManager.default.fileExists(atPath: skipped.path), "not written out: kept for the day")
-        XCTAssertTrue(FileManager.default.fileExists(atPath: original.path))
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: original.path), "a source outside the inbox should stay")
     }
 
     func test_convertIfSafe_refusesAWindowBatchsOutputIntoTheInbox() async throws {
@@ -87,8 +93,10 @@ final class InboxJobTests: AppModelTestCase {
         model.inbox = dir.appendingPathComponent("Inbox")
 
         // Act / Assert
-        XCTAssertFalse(model.convertIfSafe(to: model.inbox.appendingPathComponent("out")))
-        XCTAssertTrue(model.jobs.isEmpty)
+        XCTAssertFalse(
+            model.convertIfSafe(to: model.inbox.appendingPathComponent("out")),
+            "an output folder in the inbox should be refused")
+        XCTAssertTrue(model.jobs.isEmpty, "\(model.jobs.count) jobs queued")
     }
 
     func test_submit_refusesOutputIntoTheInbox() {

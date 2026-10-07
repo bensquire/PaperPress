@@ -1,4 +1,3 @@
-import CoreGraphics
 import XCTest
 
 @testable import PressKit
@@ -13,15 +12,15 @@ final class Gray4Tests: FixtureTestCase {
             pages: [PDFWriter.Page(content: .gray4Flate(try Gray4.encode(page)), dpi: 150)]
         )
         let url = Fixtures.write(pdf, to: dir, name: "roundtrip.pdf")
-        let doc = try XCTUnwrap(CGPDFDocument(url as CFURL), file: file, line: line)
-        let rendered = try PDFRender.gray(page: try XCTUnwrap(doc.page(at: 1)), dpi: 150)
-        XCTAssertEqual(rendered.width, page.width, file: file, line: line)
-        XCTAssertEqual(rendered.height, page.height, file: file, line: line)
+        let rendered = try Fixtures.rendered(url, dpi: 150)
+        XCTAssertEqual(rendered.width, page.width, "rendered width in pixels", file: file, line: line)
+        XCTAssertEqual(rendered.height, page.height, "rendered height in pixels", file: file, line: line)
         var worst = 0
         for i in 0..<page.pixels.count {
             worst = max(worst, abs(Int(page.pixels[i]) - Int(rendered.pixels[i])))
         }
-        XCTAssertLessThan(worst, 24, file: file, line: line)
+        XCTAssertLessThan(
+            worst, 24, "worst pixel off by \(worst) gray levels", file: file, line: line)
     }
 
     func test_encode_roundTripsThroughPDFWithinQuantizationError() throws {

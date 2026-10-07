@@ -26,7 +26,7 @@ final class PDFWriterTests: FixtureTestCase {
         let url = try ocrPDF([word("HELLO")])
 
         // Assert — invisible render mode, the word, and a viewer finds it
-        let content = try XCTUnwrap(Fixtures.contentStream(of: url))
+        let content = try XCTUnwrap(Fixtures.contentStream(of: url), "the page has no content stream")
         XCTAssertTrue(content.contains("BT 3 Tr"), "text layer should be invisible")
         XCTAssertTrue(content.contains("(HELLO ) Tj"), "word should be in the content stream")
         XCTAssertTrue(
@@ -44,7 +44,7 @@ final class PDFWriterTests: FixtureTestCase {
         XCTAssertNil(
             file.range(of: Data("BT 3 Tr".utf8)), "content stream should be Flate-compressed"
         )
-        XCTAssertNotNil(file.range(of: Data("/Filter/FlateDecode>>".utf8)))
+        XCTAssertNotNil(file.range(of: Data("/Filter/FlateDecode>>".utf8)), "no Flate filter on the stream")
     }
 
     func test_build_ocrTextKeepsLatin1Accents() throws {
@@ -60,9 +60,14 @@ final class PDFWriterTests: FixtureTestCase {
 
     /// Where a reader puts the OCR layer's first `length` characters, and
     /// the page's size, in points.
-    private func selected(_ length: Int, in url: URL) throws -> (bounds: CGRect, page: CGSize) {
-        let page = try XCTUnwrap(PDFDocument(url: url)?.page(at: 0))
-        let selection = try XCTUnwrap(page.selection(for: NSRange(location: 0, length: length)))
+    private func selected(
+        _ length: Int, in url: URL, file: StaticString = #filePath, line: UInt = #line
+    ) throws -> (bounds: CGRect, page: CGSize) {
+        let page = try XCTUnwrap(
+            PDFDocument(url: url)?.page(at: 0), "PDFKit can't open the page", file: file, line: line)
+        let selection = try XCTUnwrap(
+            page.selection(for: NSRange(location: 0, length: length)),
+            "nothing to select in the first \(length) characters", file: file, line: line)
         return (selection.bounds(for: page), page.bounds(for: .mediaBox).size)
     }
 
@@ -73,10 +78,10 @@ final class PDFWriterTests: FixtureTestCase {
 
         // Assert — selecting it highlights the box: not below it, and not
         // past it into a next word, which a reader would then join it to
-        XCTAssertEqual(highlight.minX, 0.1 * page.width, accuracy: 1)
-        XCTAssertEqual(highlight.maxX, 0.3 * page.width, accuracy: 1)
-        XCTAssertEqual(highlight.minY, 0.8 * page.height, accuracy: 0.5)
-        XCTAssertEqual(highlight.height, 0.05 * page.height, accuracy: 0.5)
+        XCTAssertEqual(highlight.minX, 0.1 * page.width, accuracy: 1, "highlight's left edge, in points")
+        XCTAssertEqual(highlight.maxX, 0.3 * page.width, accuracy: 1, "highlight's right edge, in points")
+        XCTAssertEqual(highlight.minY, 0.8 * page.height, accuracy: 0.5, "highlight's bottom, in points")
+        XCTAssertEqual(highlight.height, 0.05 * page.height, accuracy: 0.5, "highlight's height, in points")
     }
 
     func test_build_endsAWordClearOfTheNextOnItsLine() throws {
@@ -85,7 +90,9 @@ final class PDFWriterTests: FixtureTestCase {
 
         // Assert — a gap of a fifth of the font size before the next word,
         // where pdftotext -raw breaks words (it ignores space characters)
-        XCTAssertLessThanOrEqual(first.maxX, 0.302 * page.width - 0.2 * 0.05 * page.height)
+        XCTAssertLessThanOrEqual(
+            first.maxX, 0.302 * page.width - 0.2 * 0.05 * page.height,
+            "the first word's right edge, in points, should leave a gap before the next")
     }
 
     func test_build_withoutAnOCRLayer_leavesTheFontOut() throws {
@@ -93,7 +100,7 @@ final class PDFWriterTests: FixtureTestCase {
         let pdf = try PDFWriter.build(pages: [PDFWriter.Page(content: .g4(Self.background), dpi: 150)])
 
         // Assert — nearly a kilobyte of /Widths no page would use
-        XCTAssertNil(pdf.range(of: Data("/BaseFont".utf8)))
+        XCTAssertNil(pdf.range(of: Data("/BaseFont".utf8)), "a page without OCR text carries a font")
     }
 
     func test_helveticaWidths_matchTheStandardMetrics() {
@@ -121,9 +128,10 @@ final class PDFWriterTests: FixtureTestCase {
 
         // Assert
         XCTAssertNotNil(
-            pdf.range(of: Data("/Producer (\(PDFWriter.producerMarker))".utf8))
+            pdf.range(of: Data("/Producer (\(PDFWriter.producerMarker))".utf8)),
+            "no PaperPress Producer in the file"
         )
-        XCTAssertNotNil(pdf.range(of: Data("/Info ".utf8)))
+        XCTAssertNotNil(pdf.range(of: Data("/Info ".utf8)), "the trailer doesn't point at an Info dictionary")
     }
 
     func test_build_fixtureProducerOverridesDefault() {
@@ -131,8 +139,10 @@ final class PDFWriterTests: FixtureTestCase {
         let pdf = Fixtures.scannedPDF(pages: [Fixtures.textPage()], dpi: 150)
 
         // Assert
-        XCTAssertNil(pdf.range(of: Data(PDFWriter.producerMarker.utf8)))
-        XCTAssertNotNil(pdf.range(of: Data(Fixtures.foreignProducer.utf8)))
+        XCTAssertNil(
+            pdf.range(of: Data(PDFWriter.producerMarker.utf8)), "a fixture claims to be PaperPress output")
+        XCTAssertNotNil(
+            pdf.range(of: Data(Fixtures.foreignProducer.utf8)), "the fixture's own Producer is missing")
     }
 
     func test_build_copiedPagesShareTheirFont() throws {
@@ -140,9 +150,9 @@ final class PDFWriterTests: FixtureTestCase {
         let src = Fixtures.write(
             Fixtures.drawnPDF([.text("First page"), .text("Second page")]), to: dir, name: "v.pdf"
         )
-        let doc = try XCTUnwrap(CGPDFDocument(src as CFURL))
+        let doc = try XCTUnwrap(CGPDFDocument(src as CFURL), "the fixture doesn't open")
         let copier = PageCopier()
-        let copies = try (1...2).map { try copier.copy(try XCTUnwrap(doc.page(at: $0))) }
+        let copies = try (1...2).map { try copier.copy(try XCTUnwrap(doc.page(at: $0), "no page \($0)")) }
 
         // Act
         let one = try PDFWriter.build(pages: [PDFWriter.Page(original: copies[0])])
@@ -181,7 +191,8 @@ final class OCRTests: XCTestCase {
         let context = try XCTUnwrap(
             CGContext(
                 data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w,
-                space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue))
+                space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue),
+            "no \(w) × \(h) gray context")
         context.setFillColor(gray: 1, alpha: 1)
         context.fill(CGRect(x: 0, y: 0, width: w, height: h))
         for (i, (font, text)) in [
@@ -198,7 +209,8 @@ final class OCRTests: XCTestCase {
         }
 
         // Act
-        let words = try await OCR.recognize(cgImage: try XCTUnwrap(context.makeImage()))
+        let words = try await OCR.recognize(
+            cgImage: try XCTUnwrap(context.makeImage(), "the drawn page didn't become an image"))
 
         // Assert — the English word by word, and the Chinese line whole
         let texts = words.map(\.text)
@@ -211,18 +223,23 @@ final class OCRTests: XCTestCase {
         let page = Fixtures.renderedTextPage(fontSize: 14, ink: 0.1)
 
         // Act
-        let words = try await OCR.recognize(cgImage: try XCTUnwrap(page.cgImage))
+        let words = try await OCR.recognize(
+            cgImage: try XCTUnwrap(page.cgImage, "the fixture page didn't become an image"))
 
         // Assert — Vision finds text, one word an entry, each boxed in
         // range and narrower than the line it came from
-        XCTAssertFalse(words.isEmpty)
+        XCTAssertFalse(words.isEmpty, "Vision found no words")
         let joined = words.map(\.text).joined(separator: " ")
         let expected = Fixtures.sampleText.split(separator: " ").map(String.init)
-        XCTAssertTrue(expected.contains { joined.contains($0) })
+        XCTAssertTrue(expected.contains { joined.contains($0) }, "none of the sample's words in: \(joined)")
         for word in words {
             XCTAssertFalse(word.text.contains(where: \.isWhitespace), "\"\(word.text)\" is more than a word")
-            XCTAssertTrue(word.box.minX >= 0 && word.box.maxX <= 1)
-            XCTAssertTrue(word.box.minY >= 0 && word.box.maxY <= 1)
+            XCTAssertTrue(
+                word.box.minX >= 0 && word.box.maxX <= 1,
+                "\"\(word.text)\" box \(word.box) runs off the page sideways")
+            XCTAssertTrue(
+                word.box.minY >= 0 && word.box.maxY <= 1,
+                "\"\(word.text)\" box \(word.box) runs off the page vertically")
             XCTAssertLessThan(word.box.width, 0.5, "\"\(word.text)\" has its line's box")
         }
     }
@@ -249,7 +266,7 @@ final class G4Tests: XCTestCase {
         let stream = try G4.extractStream(fromTIFF: tiff(fillOrder: 1))
 
         // Assert
-        XCTAssertEqual(stream.data, Data(codestream))
+        XCTAssertEqual(stream.data, Data(codestream), "the codestream should come back as written")
         XCTAssertEqual(stream.width, 8)
         XCTAssertEqual(stream.height, 1)
     }
@@ -257,7 +274,7 @@ final class G4Tests: XCTestCase {
     func test_extractStream_refusesReversedBitOrder() {
         // Arrange / Act / Assert — CCITTFaxDecode would misread every byte
         XCTAssertThrowsError(try G4.extractStream(fromTIFF: tiff(fillOrder: 2))) {
-            guard case .scanFailed(let message) = $0 as? ScanError, message.contains("fill order") else {
+            guard case .scanFailed(let message) = $0 as? PressError, message.contains("fill order") else {
                 return XCTFail("got \($0)")
             }
         }

@@ -49,7 +49,7 @@ final class EdgeCleanTests: XCTestCase {
         EdgeClean.removeScanBorders(&g, dpi: 300)
 
         // Assert
-        XCTAssertEqual(g.pixels, before)
+        XCTAssertEqual(g.pixels, before, "a clean page was changed")
     }
 }
 
@@ -73,8 +73,7 @@ final class EdgeCleanConverterTests: FixtureTestCase {
         _ = try await Converter.convert(report: report, to: out, settings: settings)
 
         // Assert — the written page's left edge is paper, not band
-        let doc = try XCTUnwrap(CGPDFDocument(out as CFURL))
-        let rendered = try PDFRender.gray(page: try XCTUnwrap(doc.page(at: 1)), dpi: 75)
+        let rendered = try Fixtures.rendered(out, dpi: 75)
         var darkEdge = 0
         for y in 0..<rendered.height {
             if rendered.pixels[y * rendered.width + 4] < 100 { darkEdge += 1 }
