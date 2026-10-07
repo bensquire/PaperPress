@@ -342,6 +342,36 @@ final class ConverterTests: FixtureTestCase {
         XCTAssertTrue(again.converted, "a re-run should replace its own output")
     }
 
+    func test_convert_copyOverItsOwnEarlierOutput_replacesItWithTheSource() async throws {
+        // Arrange — a first run converted the scan; a second, asking for a
+        // saving no output can reach, copies the original over that output
+        let page = Fixtures.textPage(width: 1240, height: 1754, noise: true)
+        let src = Fixtures.write(
+            Fixtures.scannedPDF(pages: [page], dpi: 150), to: dir, name: "scan.pdf"
+        )
+        let past = Date(timeIntervalSince1970: 1_000_000_000)
+        try FileManager.default.setAttributes([.modificationDate: past], ofItemAtPath: src.path)
+        let out = dir.appendingPathComponent("out/scan.pdf")
+        let report = try PDFInspector.inspect(src)
+        _ = try await Converter.convert(report: report, to: out, settings: anySaving)
+        var strict = noOCR
+        strict.minSavingFraction = 0.9999
+
+        // Act
+        let result = try await Converter.convert(report: report, to: out, settings: strict)
+
+        // Assert — the source's bytes and date, and nothing left beside it
+        XCTAssertEqual(result.outcome, .copied(.insufficientSaving))
+        XCTAssertEqual(
+            try Data(contentsOf: out), try Data(contentsOf: src), "the output should be the source's bytes")
+        XCTAssertEqual(
+            try FileManager.default.attributesOfItem(atPath: out.path)[.modificationDate] as? Date, past,
+            "the copy should keep the source's modification date")
+        XCTAssertEqual(
+            try FileManager.default.contentsOfDirectory(atPath: out.deletingLastPathComponent().path),
+            ["scan.pdf"], "the output folder should hold only the copy")
+    }
+
     func test_convert_passThroughOverAnIdenticalCopy_leavesItInPlace() async throws {
         // Arrange — an earlier run already copied this file through
         let src = Fixtures.write(Fixtures.bornDigitalPDF(), to: dir, name: "digital.pdf")

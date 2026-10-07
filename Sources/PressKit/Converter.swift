@@ -426,15 +426,24 @@ public enum Converter {
     }
 
     /// Copies `src` over `dst`. Only reached once checkDestination has
-    /// cleared whatever is at `dst`; copyItem itself refuses an existing
-    /// destination, hence the removal.
+    /// cleared whatever is at `dst`. An earlier output is swapped for the copy
+    /// in one step, not deleted first, so a copy that fails part-way leaves it
+    /// where it was; the copy keeps the source's dates, not the old file's.
+    /// /documentation/foundation/filemanager/replaceitemat(_:withitemat:backupitemname:options:)
     static func copyThrough(_ src: URL, to dst: URL) throws {
         let fm = FileManager.default
         try ensureParent(of: dst)
-        if fm.fileExists(atPath: dst.path) {
-            try fm.removeItem(at: dst)
+        guard fm.fileExists(atPath: dst.path) else {
+            try fm.copyItem(at: src, to: dst)
+            return
         }
-        try fm.copyItem(at: src, to: dst)
+        // On dst's volume, as replaceItemAt requires.
+        let staging = try fm.url(
+            for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: dst, create: true)
+        defer { try? fm.removeItem(at: staging) }
+        let copy = staging.appendingPathComponent(dst.lastPathComponent)
+        try fm.copyItem(at: src, to: copy)
+        _ = try fm.replaceItemAt(dst, withItemAt: copy, options: .usingNewMetadataOnly)
     }
 
     static func ensureParent(of url: URL) throws {
