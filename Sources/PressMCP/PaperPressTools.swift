@@ -212,7 +212,7 @@ public struct PaperPressTools: MCPTools {
             [
                 "name": "convert", "title": "Convert PDFs",
                 "description":
-                    "Writes compressed copies of PDFs, or folders of them, into an output folder, through PaperPress's queue. By default only the files worth re-compressing are written; with copy_unchanged the rest are copied too, so the output mirrors the sources whole. Originals are never modified (but a file in PaperPress's inbox is deleted from there once written out). Opens PaperPress if it isn't running (the user must have turned on Settings › Assistants). Returns the batch's results, or its job id if it is still running after wait_seconds; the job carries on either way.",
+                    "Writes compressed copies of PDFs, or folders of them, into an output folder, through PaperPress's queue. By default only the files worth re-compressing are written; with copy_unchanged the rest are copied too, so the output mirrors the sources whole. Originals are never modified (but a file in PaperPress's inbox is deleted from there once written out). Opens PaperPress if it isn't running (the user must have turned on Settings › Assistants), and the user may have to approve the batch there before it runs. Returns the batch's results, or its job id if it is still running after wait_seconds; the job carries on either way.",
                 "inputSchema": [
                     "type": "object", "required": ["paths", "output"], "additionalProperties": false,
                     "properties": [
@@ -220,7 +220,7 @@ public struct PaperPressTools: MCPTools {
                         "output": [
                             "type": "string",
                             "description":
-                                "The folder to write into, created if needed. Not a source folder, not one inside a source folder that would mirror onto its originals, and not PaperPress's inbox.",
+                                "The folder to write into, created if needed. Not a source folder, not one inside a source folder that would mirror onto its originals, and not PaperPress's inbox. A file already in it is replaced only if PaperPress wrote it or it matches the source byte for byte; any other file in the way is left alone, and that source is reported as failed.",
                         ],
                         "copy_unchanged": [
                             "type": "boolean",
@@ -232,7 +232,7 @@ public struct PaperPressTools: MCPTools {
                         "detail": detail,
                     ],
                 ],
-                "annotations": ["destructiveHint": false],
+                "annotations": ["destructiveHint": true],
             ],
             [
                 "name": "wait", "title": "Wait for jobs",
@@ -251,7 +251,8 @@ public struct PaperPressTools: MCPTools {
             ],
             [
                 "name": "job_status", "title": "Follow a job",
-                "description": "One job's state and progress, and once finished, what happened to each file.",
+                "description":
+                    "One job's state and progress, and once finished, what happened to each file. Answers at once: to wait for the job to finish, use wait. PaperPress must already be running: this doesn't open it.",
                 "inputSchema": [
                     "type": "object", "required": ["id"], "additionalProperties": false,
                     "properties": ["id": id, "detail": detail],
@@ -260,7 +261,8 @@ public struct PaperPressTools: MCPTools {
             ],
             [
                 "name": "jobs", "title": "List PaperPress's queue",
-                "description": "Every batch in PaperPress's queue this session, with its state.",
+                "description":
+                    "Every batch in PaperPress's queue this session, with its state and totals; job_status gives a batch's per-file results. PaperPress must already be running: this doesn't open it.",
                 "inputSchema": ["type": "object", "additionalProperties": false, "properties": [:]],
                 "annotations": ["readOnlyHint": true],
             ],
